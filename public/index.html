@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Trimmer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 8px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .header p {
+            font-size: 16px;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #2d3748;
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 11px 14px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.2s;
+            color: #1a202c;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.92;
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Progress */
+        .progress-box {
+            margin-top: 20px;
+            background: #f7fafc;
+            padding: 18px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            color: #4a5568;
+        }
+
+        .progress-bar-wrap {
+            background: #e2e8f0;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 100%;
+            width: 0%;
+            transition: width 0.4s ease;
+            border-radius: 4px;
+        }
+
+        /* Result */
+        .result-box {
+            margin-top: 20px;
+            background: #f0fdf4;
+            border: 2px solid #86efac;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .result-box.error {
+            background: #fef2f2;
+            border-color: #fca5a5;
+        }
+
+        .result-title {
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #166534;
+        }
+
+        .result-box.error .result-title {
+            color: #991b1b;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: #374151;
+        }
+
+        .meta-item span {
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .result-link {
+            display: inline-block;
+            padding: 10px 22px;
+            background: #22c55e;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .result-link:hover {
+            background: #16a34a;
+        }
+
+        @media (max-width: 600px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 26px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 Video Trimmer</h1>
+            <p>Trim YouTube video · Stack thumbnail · Custom TTS audio</p>
+        </div>
+
+        <div class="card">
+            <div class="form-group">
+                <label>YouTube URL</label>
+                <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=...">
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Start Time (giây)</label>
+                    <input type="number" id="startTime" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label>End Time (giây)</label>
+                    <input type="number" id="endTime" value="30" min="1">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Audio Mode</label>
+                <select id="audioMode" onchange="toggleHookText()">
+                    <option value="original">🎵 Original Audio</option>
+                    <option value="hook">🎤 Custom Hook (TTS)</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="hookTextDiv" style="display:none;">
+                <label>Hook Text (ElevenLabs TTS)</label>
+                <textarea id="hookText" rows="3"
+                    placeholder="Nhập nội dung sẽ được chuyển thành giọng nói..."></textarea>
+            </div>
+
+            <button class="btn" id="trimBtn" onclick="processTrim()">
+                ✂️ Trim & Process Video
+            </button>
+
+            <div id="progressWrap" style="display:none;">
+                <div class="progress-box">
+                    <div class="progress-header">
+                        <span id="statusText">Processing...</span>
+                        <span id="elapsedTime">0s</span>
+                    </div>
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar" id="progressBar"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="resultWrap"></div>
+        </div>
+    </div>
+
+    <script>
+        function toggleHookText() {
+            const mode = document.getElementById('audioMode').value;
+            document.getElementById('hookTextDiv').style.display = mode === 'hook' ? 'block' : 'none';
+        }
+
+        async function processTrim() {
+            const youtubeUrl = document.getElementById('youtubeUrl').value.trim();
+            const startTime = parseFloat(document.getElementById('startTime').value);
+            const endTime = parseFloat(document.getElementById('endTime').value);
+            const audioMode = document.getElementById('audioMode').value;
+            const hookText = document.getElementById('hookText').value.trim();
+
+            if (!youtubeUrl) return alert('Vui lòng nhập YouTube URL');
+            if (endTime <= startTime) return alert('End time phải lớn hơn Start time');
+            if (audioMode === 'hook' && !hookText) return alert('Vui lòng nhập Hook Text');
+
+            const btn = document.getElementById('trimBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Processing...';
+
+            document.getElementById('progressWrap').style.display = 'block';
+            document.getElementById('resultWrap').innerHTML = '';
+            document.getElementById('progressBar').style.width = '15%';
+            document.getElementById('progressBar').style.background = 'linear-gradient(90deg,#667eea,#764ba2)';
+            document.getElementById('statusText').textContent = 'Đang xử lý video...';
+
+            const t0 = Date.now();
+            const timer = setInterval(() => {
+                document.getElementById('elapsedTime').textContent =
+                    ((Date.now() - t0) / 1000).toFixed(0) + 's';
+            }, 500);
+
+            // Fake progress
+            let fakeProgress = 15;
+            const fakeTimer = setInterval(() => {
+                if (fakeProgress < 85) {
+                    fakeProgress += Math.random() * 3;
+                    document.getElementById('progressBar').style.width = fakeProgress + '%';
+                }
+            }, 1500);
+
+            try {
+                const res = await fetch('/api/trim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        youtubeUrl, startTime, endTime, audioMode,
+                        hookText: audioMode === 'hook' ? hookText : ''
+                    })
+                });
+
+                const data = await res.json();
+                clearInterval(timer);
+                clearInterval(fakeTimer);
+
+                if (data.success) {
+                    document.getElementById('progressBar').style.width = '100%';
+                    document.getElementById('statusText').textContent = '✅ Hoàn thành!';
+                    const m = data.metadata;
+                    document.getElementById('resultWrap').innerHTML = `
+                    <div class="result-box">
+                        <div class="result-title">✅ Video processed successfully!</div>
+                        <div class="meta-grid">
+                            <div class="meta-item">Trim duration: <span>${m.duration}s</span></div>
+                            <div class="meta-item">Final duration: <span>${m.finalDuration.toFixed(1)}s</span></div>
+                            <div class="meta-item">Audio mode: <span>${m.audioMode}</span></div>
+                            <div class="meta-item">Processing: <span>${m.processingTime}s</span></div>
+                            <div class="meta-item">Upload time: <span>${m.uploadTime}s</span></div>
+                            <div class="meta-item">Service: <span>${data.uploadService} ${data.permanent ? '(Permanent)' : '(Temporary)'}</span></div>
+                        </div>
+                        <a href="${data.videoUrl}" target="_blank" class="result-link">
+                            📥 Download / View Video
+                        </a>
+                    </div>`;
+                } else {
+                    throw new Error(data.details || data.error || 'Processing failed');
+                }
+            } catch (err) {
+                clearInterval(timer);
+                clearInterval(fakeTimer);
+                document.getElementById('progressBar').style.width = '100%';
+                document.getElementById('progressBar').style.background = '#ef4444';
+                document.getElementById('statusText').textContent = '❌ Lỗi';
+                document.getElementById('resultWrap').innerHTML = `
+                <div class="result-box error">
+                    <div class="result-title">❌ Xử lý thất bại</div>
+                    <p style="font-size:14px;color:#7f1d1d;">${err.message}</p>
+                </div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '✂️ Trim & Process Video';
+            }
+        }
+    </script>
+</body>
+
+</html>

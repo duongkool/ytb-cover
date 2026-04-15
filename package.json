@@ -1,0 +1,38 @@
+{
+    "name": "video-trimmer",
+    "version": "1.0.0",
+    "description": "YouTube Video Trimmer with TTS support",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "nodemon server.js"
+    },
+    "nodemonConfig": {
+        "watch": [
+            "routes/",
+            "utils/",
+            "config.js",
+            "server.js"
+        ],
+        "ignore": [
+            "temp_*",
+            "*.mp4",
+            "*.m4a",
+            "*.mp3",
+            "*.jpg",
+            "*.part",
+            "*.tmp"
+        ],
+        "ext": "js,json",
+        "delay": 500
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "dotenv": "^17.4.2",
+        "express": "^4.18.0",
+        "form-data": "^4.0.0"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.0"
+    }
+}
