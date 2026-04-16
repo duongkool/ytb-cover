@@ -12,14 +12,12 @@ const { uploadVideo } = require('../utils/uploadService');
 const execAsync = promisify(exec);
 const router = express.Router();
 
-// ✅ Tạo thư mục temp/{videoId}
 function createTempDir(videoId) {
     const tempDir = path.join(__dirname, '..', 'temp', String(videoId));
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     return tempDir;
 }
 
-// ✅ Xóa toàn bộ thư mục temp/{videoId}
 function cleanupTempDir(tempDir) {
     try {
         if (fs.existsSync(tempDir)) {
@@ -31,27 +29,26 @@ function cleanupTempDir(tempDir) {
     }
 }
 
-async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText, videoId = Date.now()) {
-    // Validation
+async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText, videoId = Date.now(), musicUrl = '', isShort = false) {
     if (!youtubeUrl || startTime === undefined || endTime === undefined)
         throw new Error('Missing required params: youtubeUrl, startTime, endTime');
-    if (endTime <= startTime)
+    if (!isShort && endTime <= startTime)
         throw new Error('endTime must be greater than startTime');
-    if (startTime < 0)
+    if (!isShort && startTime < 0)
         throw new Error('startTime không được âm');
-    if (endTime - startTime > 300)
+    if (!isShort && endTime - startTime > 300)
         throw new Error('Đoạn trim tối đa 300s');
     if (!['original', 'hook'].includes(audioMode))
         throw new Error('audioMode must be "original" or "hook"');
     if (audioMode === 'hook' && (!hookText || !hookText.trim()))
         throw new Error('hookText is required when audioMode is "hook"');
 
-    // ✅ Tất cả temp files nằm trong temp/{videoId}/
     const tempDir = createTempDir(videoId);
     const inputPath = path.join(tempDir, 'input.mp4');
     const trimmedPath = path.join(tempDir, 'trimmed.mp4');
     const thumbnailPath = path.join(tempDir, 'thumb.jpg');
     const hookAudioPath = path.join(tempDir, 'hook.mp3');
+    const musicPath = path.join(tempDir, 'music.mp3');
     const withAudioPath = path.join(tempDir, 'withaudio.mp4');
     const stackedPath = path.join(tempDir, 'stacked.mp4');
     const outputPath = path.join(tempDir, 'output.mp4');
@@ -62,9 +59,11 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
         const urlType = detectVideoUrlType(youtubeUrl);
         let videoMetadata = {};
 
-        console.log(`[${videoId}] 🔍 URL type: ${urlType}`);
+        console.log(`[${videoId}] 🔍 URL type: ${urlType} | isShort: ${isShort}`);
         if (urlType === 'youtube') {
-            videoMetadata = await downloadYoutubeVideo(youtubeUrl, inputPath, videoId, startTime, endTime);
+            videoMetadata = await downloadYoutubeVideo(
+                youtubeUrl, inputPath, videoId, startTime, endTime, musicUrl, isShort
+            );
         } else if (urlType === 'direct') {
             await downloadDirectVideo(youtubeUrl, inputPath, videoId, 0, endTime, null);
         } else {
@@ -89,15 +88,33 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
         }
         console.log(`[${videoId}] ✅ Thumbnail ready`);
 
-        // STEP 3: Trim
-        const duration = endTime - startTime;
-        console.log(`[${videoId}] ✂️ Trimming ${startTime}s → ${endTime}s (${duration}s)...`);
-        await execAsync(
-            `ffmpeg -ss ${startTime} -i "${inputPath}" -t ${duration} -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${trimmedPath}"`,
-            { maxBuffer: 50 * 1024 * 1024 }
-        );
+        // STEP 3: Trim hoặc Copy toàn bộ (Shorts)
+        let duration;
+
+        if (isShort) {
+            // Lấy duration thực từ video
+            const { stdout: durRaw } = await execAsync(
+                `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`
+            );
+            duration = parseFloat(durRaw.trim());
+            console.log(`[${videoId}] 📱 Shorts: full duration ${duration.toFixed(2)}s — copying...`);
+
+            await execAsync(
+                `ffmpeg -i "${inputPath}" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${trimmedPath}"`,
+                { maxBuffer: 50 * 1024 * 1024 }
+            );
+        } else {
+            duration = endTime - startTime;
+            console.log(`[${videoId}] ✂️ Trimming ${startTime}s → ${endTime}s (${duration}s)...`);
+
+            await execAsync(
+                `ffmpeg -ss ${startTime} -i "${inputPath}" -t ${duration} -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${trimmedPath}"`,
+                { maxBuffer: 50 * 1024 * 1024 }
+            );
+        }
+
         if (!fs.existsSync(trimmedPath)) throw new Error('Trim failed');
-        console.log(`[${videoId}] ✅ Trimmed`);
+        console.log(`[${videoId}] ✅ Trimmed (${duration.toFixed(2)}s)`);
 
         // STEP 4: Get dimensions
         const { stdout: dim } = await execAsync(
@@ -108,10 +125,26 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
 
         // STEP 5: Handle audio
         let mainVideo = trimmedPath;
-        if (audioMode === 'hook') {
+
+        if (musicUrl) {
+            console.log(`[${videoId}] 🎵 Applying music URL (with loop): ${musicUrl}`);
+            const musicRes = await axios.get(musicUrl, { responseType: 'arraybuffer', timeout: 30000 });
+            fs.writeFileSync(musicPath, musicRes.data);
+
+            await execAsync(
+                `ffmpeg -i "${trimmedPath}" -stream_loop -1 -i "${musicPath}" ` +
+                `-filter_complex "[1:a]aloop=loop=-1:size=2e+09[looped];[looped]atrim=0:${duration}[a]" ` +
+                `-map 0:v -map "[a]" -c:v copy -c:a aac -b:a 128k -y "${withAudioPath}"`,
+                { maxBuffer: 50 * 1024 * 1024 }
+            );
+            mainVideo = withAudioPath;
+            console.log(`[${videoId}] ✅ Music applied (looped)`);
+
+        } else if (audioMode === 'hook') {
             console.log(`[${videoId}] 🎤 Hook mode: generating TTS...`);
             await generateAudioFromText(hookText, hookAudioPath, videoId);
             if (!fs.existsSync(hookAudioPath)) throw new Error('TTS generation failed');
+
             await execAsync(
                 `ffmpeg -i "${trimmedPath}" -i "${hookAudioPath}" -filter_complex "[1:a]apad[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 128k -shortest -y "${withAudioPath}"`,
                 { maxBuffer: 50 * 1024 * 1024 }
@@ -120,24 +153,28 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
             console.log(`[${videoId}] ✅ Audio replaced`);
         }
 
-        // STEP 6: Stack video + thumbnail
-        console.log(`[${videoId}] 🎨 Stacking video + thumbnail...`);
-        await execAsync(
-            `ffmpeg -i "${mainVideo}" -i "${thumbnailPath}" ` +
-            `-filter_complex ` +
-            `"[0:v]pad=iw:ih+5:0:0:white[video_padded];` +
-            `[1:v]scale=${videoWidth}:-2[thumb_scaled];` +
-            `[video_padded][thumb_scaled]vstack=inputs=2[v]" ` +
-            `-map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${stackedPath}"`,
-            { maxBuffer: 50 * 1024 * 1024 }
-        );
-        if (!fs.existsSync(stackedPath)) throw new Error('Stack failed');
-        console.log(`[${videoId}] ✅ Stacked`);
+        // STEP 6: Stack video + thumbnail (bỏ qua nếu là Shorts)
+        let mainVideoForNormalize = mainVideo;
+
+        if (!isShort) {
+            console.log(`[${videoId}] 🎨 Stacking video + thumbnail...`);
+            await execAsync(
+                `ffmpeg -i "${mainVideo}" -i "${thumbnailPath}" ` +
+                `-filter_complex "[0:v]pad=iw:ih+5:0:0:white[video_padded];[1:v]scale=${videoWidth}:-2[thumb_padded];[video_padded][thumb_padded]vstack=inputs=2[v]" ` +
+                `-map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${stackedPath}"`,
+                { maxBuffer: 50 * 1024 * 1024 }
+            );
+            if (!fs.existsSync(stackedPath)) throw new Error('Stack failed');
+            mainVideoForNormalize = stackedPath;
+            console.log(`[${videoId}] ✅ Stacked`);
+        } else {
+            console.log(`[${videoId}] 📱 Shorts mode — skipping thumbnail stack`);
+        }
 
         // STEP 7: Normalize
         console.log(`[${videoId}] 🔄 Normalizing...`);
         await execAsync(
-            `ffmpeg -i "${stackedPath}" -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -r 30 -g 60 -keyint_min 60 -c:a aac -b:a 128k -ar 44100 -ac 2 -y "${outputPath}"`,
+            `ffmpeg -i "${mainVideoForNormalize}" -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -r 30 -g 60 -keyint_min 60 -c:a aac -b:a 128k -ar 44100 -ac 2 -y "${outputPath}"`,
             { maxBuffer: 50 * 1024 * 1024 }
         );
         if (!fs.existsSync(outputPath)) throw new Error('Normalize failed');
@@ -157,7 +194,7 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
         const uploadTime = ((Date.now() - uploadStart) / 1000).toFixed(1);
         console.log(`[${videoId}] ✅ Uploaded in ${uploadTime}s: ${uploadResult.url}`);
 
-        // STEP 9: ✅ Cleanup toàn bộ folder
+        // STEP 9: Cleanup
         cleanupTempDir(tempDir);
 
         const totalTime = ((Date.now() - processStart) / 1000).toFixed(1);
@@ -171,22 +208,23 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
             expiresIn: uploadResult.expiresIn || null,
             metadata: {
                 duration,
-                startTime,
-                endTime,
+                startTime: isShort ? 0 : startTime,
+                endTime: isShort ? duration : endTime,
                 finalDuration,
                 audioMode,
                 hookText: audioMode === 'hook' ? hookText : null,
+                musicUrl: musicUrl || null,
+                isShort,
                 originalSize: inputSize,
                 finalSize: outputSize,
                 processingTime: parseFloat(totalTime),
                 uploadTime: parseFloat(uploadTime),
                 sourceType: urlType,
             },
-            message: `✅ Trimmed ${duration}s → final ${finalDuration.toFixed(1)}s`
+            message: `✅ ${isShort ? 'Shorts' : 'Trimmed'} ${duration.toFixed(1)}s → final ${finalDuration.toFixed(1)}s`
         };
 
     } catch (error) {
-        // ✅ Lỗi cũng xóa sạch folder
         cleanupTempDir(tempDir);
         throw error;
     }
@@ -194,9 +232,17 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
 
 // POST /api/trim
 router.post('/', async (req, res) => {
-    const { youtubeUrl, startTime, endTime, audioMode = 'original', hookText = '' } = req.body;
+    const {
+        youtubeUrl, startTime, endTime,
+        audioMode = 'original', hookText = '',
+        musicUrl = '', isShort = false
+    } = req.body;
     try {
-        const result = await processVideo(youtubeUrl, startTime, endTime, audioMode, hookText);
+        const result = await processVideo(
+            youtubeUrl, startTime, endTime,
+            audioMode, hookText, Date.now(),
+            musicUrl, isShort
+        );
         res.json(result);
     } catch (error) {
         console.error(`❌ Trim error:`, error.message);

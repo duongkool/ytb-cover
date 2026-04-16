@@ -10,7 +10,7 @@ const execAsync = promisify(exec);
 // ─────────────────────────────────────────────
 // STEP 1: Gọi RapidAPI → nhận progress_url + info
 // ─────────────────────────────────────────────
-async function requestVideoDownload(youtubeUrl, retries = 5, delayMs = 2000) {
+async function requestVideoDownload(youtubeUrl, musicUrl = '', isShort = false, retries = 5, delayMs = 2000) {
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -21,16 +21,16 @@ async function requestVideoDownload(youtubeUrl, retries = 5, delayMs = 2000) {
                 'https://youtube-info-download-api.p.rapidapi.com/ajax/download.php',
                 {
                     params: {
-                        format: '480',
+                        format: isShort ? '720' : '480',
                         add_info: '0',
                         url: youtubeUrl,
                         audio_quality: '128',
                         allow_extended_duration: 'false',
-                        no_merge: 'false',
+                        no_merge: musicUrl ? 'true' : 'false',
                         audio_language: 'en'
                     },
                     headers: {
-                        'x-rapidapi-key': "f6fe2e6663msh497decc6d77837dp12c1a8jsn3417c2dd3abb",
+                        'x-rapidapi-key': config.RAPIDAPI_KEY,
                         'x-rapidapi-host': 'youtube-info-download-api.p.rapidapi.com'
                     },
                     timeout: 30000
@@ -42,7 +42,8 @@ async function requestVideoDownload(youtubeUrl, retries = 5, delayMs = 2000) {
 
             console.log(`✅ Job created: ${res.data.id}`);
             console.log(`   Title: ${res.data.title}`);
-            console.log(`   Progress URL: ${res.data.progress_url}`);
+            console.log(`   Format: ${isShort ? '720p (Shorts)' : '480p'}`);
+            console.log(`   no_merge: ${musicUrl ? 'true' : 'false'}`);
 
             return {
                 id: res.data.id,
@@ -85,13 +86,11 @@ async function pollDownloadUrl(progressUrl, videoId, maxWaitMs = 300000) {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
             console.log(`[${videoId}] 📊 Progress: ${progress}/1000 (${elapsed}s)`);
 
-            // ✅ Hoàn thành khi progress = 1000
             if (data.success == 1 && progress >= 1000 && data.download_url) {
                 console.log(`[${videoId}] ✅ Download URL ready: ${data.download_url}`);
                 return data.download_url;
             }
 
-            // Lỗi từ server
             if (data.success == 0) {
                 throw new Error(`Server error: ${data.text || 'Unknown error'}`);
             }
@@ -100,7 +99,6 @@ async function pollDownloadUrl(progressUrl, videoId, maxWaitMs = 300000) {
             console.warn(`[${videoId}] ⚠️ Poll attempt ${attempt} failed: ${err.message}`);
         }
 
-        // Chờ 3s trước khi poll lại
         await new Promise(r => setTimeout(r, 3000));
     }
 
@@ -112,11 +110,10 @@ async function pollDownloadUrl(progressUrl, videoId, maxWaitMs = 300000) {
 // ─────────────────────────────────────────────
 async function getHighQualityThumbnail(youtubeUrl) {
     try {
-        const match = youtubeUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+        const match = youtubeUrl.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
         if (!match) throw new Error('Cannot extract video ID');
         const videoId = match[1];
 
-        // Thử lấy từ video-meta API trước
         try {
             const res = await axios.post(
                 'https://n8n2.xopboo.com/webhook/video-meta',
@@ -124,7 +121,6 @@ async function getHighQualityThumbnail(youtubeUrl) {
                 { timeout: 15000 }
             );
             if (res.data?.og_image) {
-                // ✅ Kiểm tra URL có thực sự tồn tại không
                 const check = await axios.head(res.data.og_image, { timeout: 5000 });
                 if (check.status === 200) {
                     console.log(`✅ High-quality thumbnail: ${res.data.og_image}`);
@@ -135,7 +131,7 @@ async function getHighQualityThumbnail(youtubeUrl) {
             console.warn(`⚠️ video-meta API or maxres check failed: ${err.message}`);
         }
 
-        // Fallback tuần tự: sddefault → hqdefault
+        // Fallback tuần tự
         const fallbacks = [
             `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`,
             `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
@@ -152,7 +148,6 @@ async function getHighQualityThumbnail(youtubeUrl) {
         }
 
         return null;
-
     } catch (err) {
         console.warn(`⚠️ getHighQualityThumbnail failed: ${err.message}`);
         return null;
@@ -188,27 +183,23 @@ async function downloadDirectVideo(url, outputPath, videoId, startTime = 0, endT
 }
 
 // ─────────────────────────────────────────────
-// Main: Download YouTube video (video+audio đã merge sẵn)
+// Main: Download YouTube video
 // ─────────────────────────────────────────────
-async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime = 0, endTime = 50) {
-    console.log(`[${videoId}] 📥 Downloading YouTube via RapidAPI...`);
+async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime = 0, endTime = 50, musicUrl = '', isShort = false) {
+    console.log(`[${videoId}] 📥 Downloading YouTube via RapidAPI... (${isShort ? 'Shorts 720p' : 'Normal 480p'})`);
 
     try {
-        // STEP 1: Gọi song song RapidAPI + thumbnail API
         console.log(`[${videoId}] 🚀 Fetching video info + thumbnail in parallel...`);
         const [jobInfo, hqThumbnail] = await Promise.all([
-            requestVideoDownload(youtubeUrl),
+            requestVideoDownload(youtubeUrl, musicUrl, isShort),
             getHighQualityThumbnail(youtubeUrl)
         ]);
 
-        // Ưu tiên thumbnail HQ, fallback về thumbnail từ RapidAPI
         const thumbnail = hqThumbnail || jobInfo.thumbnail;
         console.log(`[${videoId}] 🖼️ Thumbnail: ${thumbnail}`);
 
-        // STEP 2: Poll cho đến khi có download_url
         const downloadUrl = await pollDownloadUrl(jobInfo.progress_url, videoId);
 
-        // STEP 3: Download file (video+audio đã merge sẵn từ API)
         console.log(`[${videoId}] 📦 Downloading merged video...`);
         await downloadDirectVideo(downloadUrl, outputPath, videoId, startTime, endTime, null);
 
@@ -217,7 +208,8 @@ async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime =
         return {
             title: jobInfo.title,
             thumbnail,
-            hasAudio: true
+            hasAudio: true,
+            isShort
         };
 
     } catch (err) {
