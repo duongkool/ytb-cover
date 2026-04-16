@@ -21,7 +21,7 @@ async function requestVideoDownload(youtubeUrl, musicUrl = '', isShort = false, 
                 'https://youtube-info-download-api.p.rapidapi.com/ajax/download.php',
                 {
                     params: {
-                        format: isShort ? '720' : '480',
+                        format: isShort ? '480' : '480',
                         add_info: '0',
                         url: youtubeUrl,
                         audio_quality: '128',
@@ -201,8 +201,12 @@ async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime =
         const downloadUrl = await pollDownloadUrl(jobInfo.progress_url, videoId);
 
         console.log(`[${videoId}] 📦 Downloading merged video...`);
-        await downloadDirectVideo(downloadUrl, outputPath, videoId, startTime, endTime, null);
-
+        await downloadDirectVideo(
+            downloadUrl, outputPath, videoId,
+            isShort ? 0 : startTime,
+            isShort ? null : endTime,  // ← null thay vì 999999
+            null
+        );
         console.log(`[${videoId}] ✅ Done: ${(fs.statSync(outputPath).size / 1024 / 1024).toFixed(2)} MB`);
 
         return {

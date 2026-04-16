@@ -67,11 +67,14 @@ async function downloadNormal(url, outputPath, videoId) {
  * @param {string} url
  * @param {string} outputPath
  * @param {string} videoId
- * @param {number} startTime - giây bắt đầu cần dùng
- * @param {number} endTime   - giây kết thúc cần dùng
- * @param {number} totalDuration - tổng duration video (giây), từ Captick API
+ * @param {number} startTime     - giây bắt đầu cần dùng
+ * @param {number|null} endTime  - giây kết thúc, null = tải toàn bộ
+ * @param {number|null} totalDuration - tổng duration video (giây)
  */
-async function smartDownload(url, outputPath, videoId, startTime = 0, endTime = 50, totalDuration = null) {
+async function smartDownload(url, outputPath, videoId, startTime = 0, endTime = null, totalDuration = null) {
+    // Guard: null hoặc >= 99999 → tải toàn bộ file (dành cho Shorts)
+    const effectiveEndTime = (!endTime || endTime >= 99999) ? null : endTime;
+
     try {
         const { size, supportsRanges } = await getFileSize(url);
 
@@ -80,23 +83,28 @@ async function smartDownload(url, outputPath, videoId, startTime = 0, endTime = 
             return await downloadNormal(url, outputPath, videoId);
         }
 
-        // ✅ Luôn tải từ byte 0 — YouTube moov atom ở cuối file
-        // Chỉ giới hạn endByte dựa trên thời gian cần thiết
+        // Luôn tải từ byte 0 — YouTube moov atom ở cuối file
         const startByte = 0;
         let endByte;
 
-        if (totalDuration && totalDuration > 0) {
-            // Tính % file cần tải: (endTime + buffer) / totalDuration
-            const safeEnd = endTime + 30; // 30s buffer
+        if (effectiveEndTime === null) {
+            // Shorts hoặc không giới hạn → tải toàn bộ file
+            endByte = size;
+            console.log(`[${videoId}] 📦 Full download: ${(size / 1024 / 1024).toFixed(1)}MB`);
+
+        } else if (totalDuration && totalDuration > 0) {
+            // Có totalDuration → tính % theo thời gian
+            const safeEnd = effectiveEndTime + 30; // 30s buffer
             const ratio = Math.min(safeEnd / totalDuration, 1);
             endByte = Math.floor(ratio * size);
 
             // Đảm bảo tải ít nhất 20MB để có moov atom + đủ data
             endByte = Math.max(endByte, Math.min(20 * 1024 * 1024, size));
+
         } else {
-            // Fallback: 2MB/s estimate
+            // Không có totalDuration → ước tính 2MB/s
             endByte = Math.min(
-                Math.floor(2 * 1024 * 1024 * (endTime + 30) * 1.8),
+                Math.floor(2 * 1024 * 1024 * (effectiveEndTime + 30) * 1.8),
                 size
             );
         }
