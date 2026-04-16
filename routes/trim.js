@@ -123,7 +123,13 @@ async function processVideo(youtubeUrl, startTime, endTime, audioMode, hookText,
         // STEP 6: Stack video + thumbnail
         console.log(`[${videoId}] 🎨 Stacking video + thumbnail...`);
         await execAsync(
-            `ffmpeg -i "${mainVideo}" -i "${thumbnailPath}" -filter_complex "[1:v]scale=${videoWidth}:-1[thumb];[0:v][thumb]vstack=inputs=2[v]" -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${stackedPath}"`,
+            `ffmpeg -i "${mainVideo}" -i "${thumbnailPath}" ` +
+            `-filter_complex ` +
+            `"[0:v]pad=iw:ih+5:0:0:white[video_padded];` +
+            `[1:v]scale=${videoWidth}:-2[thumb_scaled];` +
+            `[thumb_scaled]pad=iw:ih+5:0:5:white[thumb_padded];` +
+            `[video_padded][thumb_padded]vstack=inputs=2[v]" ` +
+            `-map "[v]" -map 0:a -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${stackedPath}"`,
             { maxBuffer: 50 * 1024 * 1024 }
         );
         if (!fs.existsSync(stackedPath)) throw new Error('Stack failed');

@@ -7,68 +7,135 @@ const { smartDownload } = require('./fastDownloader');
 
 const execAsync = promisify(exec);
 
-async function getVideoInfo(youtubeUrl, retries = 5, delayMs = 2000) {
+// ─────────────────────────────────────────────
+// STEP 1: Gọi RapidAPI → nhận progress_url + info
+// ─────────────────────────────────────────────
+async function requestVideoDownload(youtubeUrl, retries = 5, delayMs = 2000) {
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
-            console.log(`📡 Fetching video info... (attempt ${attempt}/${retries})`);
-            const res = await axios.get(config.CAPTICK_API_URL, {
-                params: { url: youtubeUrl },
-                timeout: 30000
-            });
-            if (!res.data?.data) throw new Error('Invalid Captick API response');
-            console.log(`✅ Video: ${res.data.data.title}`);
-            return res.data.data;
+            console.log(`📡 Requesting video download... (attempt ${attempt}/${retries})`);
+
+            const res = await axios.get(
+                'https://youtube-info-download-api.p.rapidapi.com/ajax/download.php',
+                {
+                    params: {
+                        format: '480',
+                        add_info: '0',
+                        url: youtubeUrl,
+                        audio_quality: '128',
+                        allow_extended_duration: 'false',
+                        no_merge: 'false',
+                        audio_language: 'en'
+                    },
+                    headers: {
+                        'x-rapidapi-key': "f6fe2e6663msh497decc6d77837dp12c1a8jsn3417c2dd3abb",
+                        'x-rapidapi-host': 'youtube-info-download-api.p.rapidapi.com'
+                    },
+                    timeout: 30000
+                }
+            );
+
+            if (!res.data?.success) throw new Error('RapidAPI returned success=false');
+            if (!res.data?.progress_url) throw new Error('No progress_url in response');
+
+            console.log(`✅ Job created: ${res.data.id}`);
+            console.log(`   Title: ${res.data.title}`);
+            console.log(`   Progress URL: ${res.data.progress_url}`);
+
+            return {
+                id: res.data.id,
+                title: res.data.title,
+                thumbnail: res.data.info?.image || null,
+                progress_url: res.data.progress_url
+            };
+
         } catch (err) {
             lastError = err;
             console.warn(`⚠️ Attempt ${attempt}/${retries} failed: ${err.message}`);
 
             if (attempt < retries) {
-                const wait = delayMs * attempt; // 2s, 4s, 6s, 8s...
+                const wait = delayMs * attempt;
                 console.log(`⏳ Retrying in ${wait / 1000}s...`);
                 await new Promise(r => setTimeout(r, wait));
             }
         }
     }
 
-    throw new Error(`Captick API failed after ${retries} attempts: ${lastError.message}`);
+    throw new Error(`RapidAPI request failed after ${retries} attempts: ${lastError.message}`);
 }
 
-function find720pFormat(formats) {
-    let video = formats.find(f => f.format_note === '720p' && f.format_id === '136')
-        || formats.find(f => f.format_note === '720p' && f.resolution && !f.resolution.includes('audio only'));
+// ─────────────────────────────────────────────
+// STEP 2: Poll progress_url mỗi 3s → lấy download_url
+// ─────────────────────────────────────────────
+async function pollDownloadUrl(progressUrl, videoId, maxWaitMs = 300000) {
+    const startTime = Date.now();
+    let attempt = 0;
 
-    if (!video) {
-        const f360 = formats.find(f => f.format_id === '18');
-        if (f360) {
-            console.log(`⚠️ 720p not found, using 360p`);
-            return { video: f360, audio: null, combined: true };
+    console.log(`[${videoId}] ⏳ Polling progress...`);
+
+    while (Date.now() - startTime < maxWaitMs) {
+        attempt++;
+        try {
+            const res = await axios.get(progressUrl, { timeout: 15000 });
+            const data = res.data;
+
+            const progress = data.progress ?? 0;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+            console.log(`[${videoId}] 📊 Progress: ${progress}/1000 (${elapsed}s)`);
+
+            // ✅ Hoàn thành khi progress = 1000
+            if (data.success == 1 && progress >= 1000 && data.download_url) {
+                console.log(`[${videoId}] ✅ Download URL ready: ${data.download_url}`);
+                return data.download_url;
+            }
+
+            // Lỗi từ server
+            if (data.success == 0) {
+                throw new Error(`Server error: ${data.text || 'Unknown error'}`);
+            }
+
+        } catch (err) {
+            console.warn(`[${videoId}] ⚠️ Poll attempt ${attempt} failed: ${err.message}`);
         }
-        throw new Error('No suitable video format found');
+
+        // Chờ 3s trước khi poll lại
+        await new Promise(r => setTimeout(r, 3000));
     }
 
-    const audio = formats.find(f => f.format_id === '140' && f.is_audio === true)
-        || formats.find(f => f.is_audio === true || f.resolution?.includes('audio only'));
-
-    return { video, audio: audio || null, combined: false };
+    throw new Error(`Timeout: Video not ready after ${maxWaitMs / 1000}s`);
 }
 
-// ✅ Fix moov atom cho partial download
-async function fixMoovAtom(inputPath, outputPath, videoId) {
+// ─────────────────────────────────────────────
+// Lấy thumbnail chất lượng cao từ video-meta API
+// ─────────────────────────────────────────────
+async function getHighQualityThumbnail(youtubeUrl) {
     try {
-        console.log(`[${videoId}] 🔧 Fixing moov atom: ${inputPath}`);
-        await execAsync(
-            `ffmpeg -fflags +genpts+igndts -i "${inputPath}" -c copy -y "${outputPath}"`,
-            { maxBuffer: 50 * 1024 * 1024 }
+        const match = youtubeUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+        if (!match) throw new Error('Cannot extract video ID');
+        const videoId = match[1];
+
+        const res = await axios.post(
+            'https://n8n2.xopboo.com/webhook/video-meta',
+            { video_id: videoId },
+            { timeout: 15000 }
         );
-        return fs.existsSync(outputPath);
+
+        if (res.data?.og_image) {
+            console.log(`✅ High-quality thumbnail: ${res.data.og_image}`);
+            return res.data.og_image;
+        }
+        return null;
     } catch (err) {
-        console.warn(`[${videoId}] ⚠️ fixMoovAtom failed: ${err.message}`);
-        return false;
+        console.warn(`⚠️ getHighQualityThumbnail failed: ${err.message}`);
+        return null;
     }
 }
 
+// ─────────────────────────────────────────────
+// Download direct video (dùng smartDownload)
+// ─────────────────────────────────────────────
 async function downloadDirectVideo(url, outputPath, videoId, startTime = 0, endTime = 50, totalDuration = null, retries = 5, delayMs = 2000) {
     let lastError;
 
@@ -76,17 +143,15 @@ async function downloadDirectVideo(url, outputPath, videoId, startTime = 0, endT
         try {
             await smartDownload(url, outputPath, videoId, startTime, endTime, totalDuration);
             if (!fs.existsSync(outputPath)) throw new Error('Download failed - file not created');
-            return; // ✅ thành công
+            return;
         } catch (err) {
             lastError = err;
-
-            // Xóa file lỗi nếu có
             try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch { }
 
             console.warn(`[${videoId}] ⚠️ Download attempt ${attempt}/${retries} failed: ${err.message}`);
 
             if (attempt < retries) {
-                const wait = delayMs * attempt; // 2s, 4s, 6s, 8s...
+                const wait = delayMs * attempt;
                 console.log(`[${videoId}] ⏳ Retrying download in ${wait / 1000}s...`);
                 await new Promise(r => setTimeout(r, wait));
             }
@@ -95,80 +160,49 @@ async function downloadDirectVideo(url, outputPath, videoId, startTime = 0, endT
 
     throw new Error(`Download failed after ${retries} attempts: ${lastError.message}`);
 }
-async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime = 0, endTime = 50) {
-    console.log(`[${videoId}] 📥 Downloading YouTube via Captick API...`);
-    const tempVideo = outputPath.replace('.mp4', '_video.mp4');
-    const tempAudio = outputPath.replace('.mp4', '_audio.m4a');
-    const tempVideoFixed = outputPath.replace('.mp4', '_video_fixed.mp4');
-    const tempAudioFixed = outputPath.replace('.mp4', '_audio_fixed.m4a');
 
-    const cleanupAll = () => {
-        [tempVideo, tempAudio, tempVideoFixed, tempAudioFixed].forEach(f => {
-            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { }
-        });
-    };
+// ─────────────────────────────────────────────
+// Main: Download YouTube video (video+audio đã merge sẵn)
+// ─────────────────────────────────────────────
+async function downloadYoutubeVideo(youtubeUrl, outputPath, videoId, startTime = 0, endTime = 50) {
+    console.log(`[${videoId}] 📥 Downloading YouTube via RapidAPI...`);
 
     try {
-        const info = await getVideoInfo(youtubeUrl);
-        const fmt = find720pFormat(info.formats);
-
-        // Combined format (360p)
-        if (fmt.combined) {
-            await downloadDirectVideo(fmt.video.url, outputPath, videoId, startTime, endTime, info.duration);
-            return { title: info.title, duration: info.duration, thumbnail: info.thumbnail, hasAudio: true };
-        }
-
-        // Không có audio
-        if (!fmt.audio) {
-            await downloadDirectVideo(fmt.video.url, outputPath, videoId, startTime, endTime, info.duration);
-            return { title: info.title, duration: info.duration, thumbnail: info.thumbnail, hasAudio: false };
-        }
-
-        // Download song song video + audio
-        console.log(`[${videoId}] 📦 Downloading video + audio in parallel...`);
-        await Promise.all([
-            downloadDirectVideo(fmt.video.url, tempVideo, videoId, startTime, endTime, info.duration),
-            downloadDirectVideo(fmt.audio.url, tempAudio, videoId, startTime, endTime, info.duration)
+        // STEP 1: Gọi song song RapidAPI + thumbnail API
+        console.log(`[${videoId}] 🚀 Fetching video info + thumbnail in parallel...`);
+        const [jobInfo, hqThumbnail] = await Promise.all([
+            requestVideoDownload(youtubeUrl),
+            getHighQualityThumbnail(youtubeUrl)
         ]);
 
-        // ✅ Fix moov atom cho cả 2 file
-        console.log(`[${videoId}] 🔧 Fixing moov atoms...`);
-        const [videoFixed, audioFixed] = await Promise.all([
-            fixMoovAtom(tempVideo, tempVideoFixed, videoId),
-            fixMoovAtom(tempAudio, tempAudioFixed, videoId)
-        ]);
+        // Ưu tiên thumbnail HQ, fallback về thumbnail từ RapidAPI
+        const thumbnail = hqThumbnail || jobInfo.thumbnail;
+        console.log(`[${videoId}] 🖼️ Thumbnail: ${thumbnail}`);
 
-        // Chọn file để merge: dùng fixed nếu thành công, fallback về original
-        const videoInput = videoFixed ? tempVideoFixed : tempVideo;
-        const audioInput = audioFixed ? tempAudioFixed : tempAudio;
+        // STEP 2: Poll cho đến khi có download_url
+        const downloadUrl = await pollDownloadUrl(jobInfo.progress_url, videoId);
 
-        if (!fs.existsSync(audioInput)) {
-            fs.renameSync(videoInput, outputPath);
-            cleanupAll();
-            return { title: info.title, duration: info.duration, thumbnail: info.thumbnail, hasAudio: false };
-        }
+        // STEP 3: Download file (video+audio đã merge sẵn từ API)
+        console.log(`[${videoId}] 📦 Downloading merged video...`);
+        await downloadDirectVideo(downloadUrl, outputPath, videoId, startTime, endTime, null);
 
-        // Merge
-        console.log(`[${videoId}] 🔗 Merging video + audio...`);
-        await execAsync(
-            `ffmpeg -fflags +genpts -i "${videoInput}" -i "${audioInput}" -c:v copy -c:a aac -b:a 128k -shortest -y "${outputPath}"`,
-            { maxBuffer: 50 * 1024 * 1024 }
-        );
+        console.log(`[${videoId}] ✅ Done: ${(fs.statSync(outputPath).size / 1024 / 1024).toFixed(2)} MB`);
 
-        cleanupAll();
-
-        console.log(`[${videoId}] ✅ Merged: ${(fs.statSync(outputPath).size / 1024 / 1024).toFixed(2)} MB`);
-        return { title: info.title, duration: info.duration, thumbnail: info.thumbnail, hasAudio: true };
+        return {
+            title: jobInfo.title,
+            thumbnail,
+            hasAudio: true
+        };
 
     } catch (err) {
-        cleanupAll();
         throw new Error(`YouTube download failed: ${err.message}`);
     }
 }
 
+// ─────────────────────────────────────────────
 function detectVideoUrlType(url) {
     if (url.includes('youtube.com') || url.includes('youtu.be')) return 'youtube';
-    if (url.includes('googlevideo.com')) return 'direct';
+    if (url.includes('googlevideo.com') || url.includes('savenow.to')) return 'direct';
     return 'unknown';
 }
 
