@@ -116,17 +116,43 @@ async function getHighQualityThumbnail(youtubeUrl) {
         if (!match) throw new Error('Cannot extract video ID');
         const videoId = match[1];
 
-        const res = await axios.post(
-            'https://n8n2.xopboo.com/webhook/video-meta',
-            { video_id: videoId },
-            { timeout: 15000 }
-        );
-
-        if (res.data?.og_image) {
-            console.log(`✅ High-quality thumbnail: ${res.data.og_image}`);
-            return res.data.og_image;
+        // Thử lấy từ video-meta API trước
+        try {
+            const res = await axios.post(
+                'https://n8n2.xopboo.com/webhook/video-meta',
+                { video_id: videoId },
+                { timeout: 15000 }
+            );
+            if (res.data?.og_image) {
+                // ✅ Kiểm tra URL có thực sự tồn tại không
+                const check = await axios.head(res.data.og_image, { timeout: 5000 });
+                if (check.status === 200) {
+                    console.log(`✅ High-quality thumbnail: ${res.data.og_image}`);
+                    return res.data.og_image;
+                }
+            }
+        } catch (err) {
+            console.warn(`⚠️ video-meta API or maxres check failed: ${err.message}`);
         }
+
+        // Fallback tuần tự: sddefault → hqdefault
+        const fallbacks = [
+            `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`,
+            `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        ];
+
+        for (const url of fallbacks) {
+            try {
+                const check = await axios.head(url, { timeout: 5000 });
+                if (check.status === 200) {
+                    console.log(`✅ Fallback thumbnail: ${url}`);
+                    return url;
+                }
+            } catch { }
+        }
+
         return null;
+
     } catch (err) {
         console.warn(`⚠️ getHighQualityThumbnail failed: ${err.message}`);
         return null;
