@@ -1,7 +1,26 @@
 const express = require('express');
+const cors = require('cors');
 const config = require('./config');
 
 const app = express();
+
+// ─── CORS ─────────────────────────────────────────────
+const allowedOrigins = [
+    'http://localhost:3000',
+    'https://n8n2.xopboo.com',
+    'https://admin.xopboo.com',
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true); // cho phép curl, Postman
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error(`CORS blocked: ${origin}`));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: true,
+}));
 
 // ─── Middleware ────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
