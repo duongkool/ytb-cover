@@ -9,6 +9,7 @@ const allowedOrigins = [
     'http://localhost:3000',
     'https://n8n2.xopboo.com',
     'https://admin.xopboo.com',
+    "https://image-collage-bice.vercel.app"
 ];
 
 app.use(cors({
@@ -27,6 +28,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static('public'));
 
 app.use('/api/trim', require('./routes/trim'));
+app.use('/api/cover', require('./routes/cover'));
 
 app.get('/api/health', (req, res) => {
     res.json({
