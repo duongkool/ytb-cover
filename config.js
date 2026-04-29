@@ -12,4 +12,5 @@ module.exports = {
     RAPIDAPI_KEY: 'f6fe2e6663msh497decc6d77837dp12c1a8jsn3417c2dd3abb',
     // Upload service: 'gofile' | 'catbox' | 'tmpfiles'
     UPLOAD_SERVICE: process.env.UPLOAD_SERVICE || 'gofile',
+    VIMIX_API_KEY: "vmx_live_tiY4uzJay05a5DuiKaBD"
 };
