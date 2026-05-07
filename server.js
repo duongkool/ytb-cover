@@ -29,7 +29,8 @@ app.use(express.static('public'));
 
 app.use('/api/trim', require('./routes/trim'));
 app.use('/api/cover', require('./routes/cover'));
-
+const hookV2 = require('./routes/batchHookV5');
+app.use('/api/cover-v2', hookV2);
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',

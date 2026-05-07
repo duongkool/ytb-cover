@@ -9,7 +9,7 @@ const { promisify } = require('util');
 const { exec } = require('child_process');
 const { EventEmitter } = require('events');
 const { generateAudioFromText } = require('../utils/audioGenerator');
-const { uploadVideo } = require('../utils/uploadService');
+const { uploadVideo } = require('../utils/uploadMe');
 
 const execAsync = promisify(exec);
 const router = express.Router();
@@ -137,35 +137,6 @@ async function downloadImage(url, destPath) {
     return destPath;
 }
 
-// ─── Check + Download nhiều ảnh, bỏ qua ảnh lỗi ─────────────────────────────
-async function downloadImages(imageUrls, tempDir, sessionId) {
-    const results = await Promise.allSettled(
-        imageUrls.map((url, i) =>
-            downloadImage(url, path.join(tempDir, `img_${i}.jpg`))
-        )
-    );
-
-    const successPaths = [];
-    const failedUrls = [];
-
-    results.forEach((result, i) => {
-        if (result.status === 'fulfilled') {
-            successPaths.push(result.value);
-        } else {
-            failedUrls.push({ index: i, url: imageUrls[i], reason: result.reason?.message });
-            console.warn(`[${sessionId}] ⚠️ Image ${i} failed (${imageUrls[i]}): ${result.reason?.message}`);
-        }
-    });
-
-    console.log(`[${sessionId}] 🖼️ ${successPaths.length}/${imageUrls.length} images OK`);
-
-    if (successPaths.length === 0) {
-        throw new Error(`All ${imageUrls.length} images failed to download`);
-    }
-
-    return { successPaths, failedUrls };
-}
-
 // ─── TTS với retry tối đa 5 lần ──────────────────────────────────────────────
 async function generateAudioWithRetry(content, audioPath, sessionId, maxRetries = 5, language = 'en') {
     let lastError;
@@ -198,15 +169,15 @@ async function createHeaderClip(audioDuration, tempDir, srtPath = null) {
     if (srtPath && fs.existsSync(srtPath)) {
         const srtEscaped = srtPath
             .replace(/\\/g, '/')
-            .replace(/'/g, "\\'")
-            .replace(/:/g, '\\:');
+            .replace(/^([A-Z]):/, (_, d) => `${d}\\:`)
+            .replace(/'/g, "\\'");
 
         const fontsDir = path.join(__dirname, '..', 'fonts')
             .replace(/\\/g, '/')
-            .replace(/:/g, '\\:');
+            .replace(/^([A-Z]):/, (_, d) => `${d}\\:`);
 
         const cmd = `ffmpeg -f lavfi -i "color=black:size=${W}x${HEADER_H}:rate=30" \
--vf "subtitles='${srtEscaped}':fontsdir='${fontsDir}':force_style='FontName=BebasNeue-Regular,FontSize=64,Bold=0,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=45,MarginL=30,MarginR=30,MaxLineCount=1,PlayResX=720'" \
+-vf "subtitles='${srtEscaped}':fontsdir='${fontsDir}':force_style='FontName=BebasNeue-Regular,FontSize=64,Bold=0,PrimaryColour=&H0000D7FF,OutlineColour=&H00000000,Outline=4,Shadow=2,Alignment=2,MarginV=45,MarginL=30,MarginR=30,MaxLineCount=1,PlayResX=720'" \
 -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p \
 -t ${audioDuration.toFixed(2)} -an -y "${headerPath}"`;
 
@@ -221,7 +192,6 @@ async function createHeaderClip(audioDuration, tempDir, srtPath = null) {
     if (!fs.existsSync(headerPath)) throw new Error('Header clip failed');
     return headerPath;
 }
-
 // ─── B: Bottom clip ───────────────────────────────────────────────────────────
 async function createBottomClip(title, audioDuration, tempDir) {
     const bottomPath = path.join(tempDir, 'bottom.mp4');
@@ -274,17 +244,21 @@ async function createSingleImageClip(imgPath, audioDuration, tempDir) {
 }
 
 // ─── C2: Slideshow clip ───────────────────────────────────────────────────────
+// ─── C2: Image clip — nhiều ảnh (slideshow 5s/slide, loop, xfade) ─────────────
 async function createSlideshowClip(imgPaths, audioDuration, tempDir) {
     const clipPath = path.join(tempDir, 'image_clip.mp4');
     const fps = 30;
-    const SEC_PER_SLIDE = 5;
-    const transitionSec = 0.5;
+    const SEC_PER_SLIDE = 5;          // mỗi ảnh hiện 5s
+    const transitionSec = 0.5;        // fade 0.5s giữa các ảnh
 
-    const totalSlides = Math.ceil(audioDuration / SEC_PER_SLIDE) + 1;
+    // Tính tổng số slide cần thiết để phủ hết audioDuration
+    const totalSlides = Math.ceil(audioDuration / SEC_PER_SLIDE) + 1; // +1 để dư tránh thiếu frame
+    // Tạo danh sách ảnh với loop (vd: [0,1,2,0,1,2,0,...])
     const slideList = Array.from({ length: totalSlides }, (_, i) => imgPaths[i % imgPaths.length]);
 
     console.log(`[slideshow] ${imgPaths.length} images → ${totalSlides} slides × ${SEC_PER_SLIDE}s = ~${(totalSlides * SEC_PER_SLIDE).toFixed(0)}s (audio: ${audioDuration.toFixed(2)}s)`);
 
+    // Render từng segment
     const segmentPaths = [];
     for (let i = 0; i < slideList.length; i++) {
         const segPath = path.join(tempDir, `seg_${i}.mp4`);
@@ -308,6 +282,9 @@ async function createSlideshowClip(imgPaths, audioDuration, tempDir) {
         return clipPath;
     }
 
+    // Ghép tất cả segments với xfade
+    // offset của xfade thứ i = (i * SEC_PER_SLIDE) - transitionSec
+    // Vì mỗi segment có thời lượng SEC_PER_SLIDE nhưng overlap transitionSec với segment sau
     const inputArgs = segmentPaths.map(p => `-i "${p}"`).join(' ');
     const filterParts = [];
     let prev = `[0:v]`;
@@ -373,15 +350,8 @@ async function processVideo(content, title, imageUrls, jobId, language = 'en', o
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     try {
-        // STEP 1: Check + Download ảnh TRƯỚC (tránh lãng phí TTS credits)
-        onProgress({ progress: 5, step: 'images', message: `Đang kiểm tra ${imageUrls.length} ảnh...` });
-        const { successPaths: localImgPaths, failedUrls } = await downloadImages(imageUrls, tempDir, jobId);
-        if (failedUrls.length > 0) {
-            console.warn(`[${jobId}] ⚠️ ${failedUrls.length} ảnh bị skip, tiếp tục với ${localImgPaths.length} ảnh`);
-        }
-
-        // STEP 2: TTS (chỉ chạy khi đã có ít nhất 1 ảnh hợp lệ)
-        onProgress({ progress: 15, step: 'tts', message: 'Đang tạo giọng đọc TTS...' });
+        // STEP 1: TTS
+        onProgress({ progress: 10, step: 'tts', message: 'Đang tạo giọng đọc TTS...' });
         const audioPath = path.join(tempDir, 'audio.mp3');
         const srtPath = path.join(tempDir, 'subtitle.srt');
 
@@ -398,10 +368,26 @@ async function processVideo(content, title, imageUrls, jobId, language = 'en', o
                 fs.writeFileSync(srtPath, srtRes.data);
                 hasSrt = true;
                 console.log(`[${jobId}] 📝 SRT downloaded`);
+
+                // ✅ THÊM VÀO ĐÂY:
+                const srtContent = fs.readFileSync(srtPath, 'utf8');
+                const srtUpper = srtContent.replace(
+                    /^(?!\d+\s*$)(?![\d:,\s]+-->)(.+)$/gm,
+                    (line) => line.toUpperCase()
+                );
+                fs.writeFileSync(srtPath, srtUpper, 'utf8');
+                console.log(`[${jobId}] 🔤 SRT uppercased`);
+
             } catch (e) {
                 console.warn(`[${jobId}] ⚠️ SRT failed: ${e.message}`);
             }
         }
+
+        // STEP 2: Download ảnh
+        onProgress({ progress: 30, step: 'images', message: `Đang tải ${imageUrls.length} ảnh...` });
+        const localImgPaths = await Promise.all(
+            imageUrls.map((url, i) => downloadImage(url, path.join(tempDir, `img_${i}.jpg`)))
+        );
 
         // STEP 3: Build 3 layers song song
         onProgress({ progress: 50, step: 'render', message: 'Đang render các layer...' });
@@ -439,11 +425,8 @@ async function processVideo(content, title, imageUrls, jobId, language = 'en', o
             permanent: uploadResult.permanent || false,
             metadata: {
                 imageCount: imageUrls.length,
-                imagesDownloaded: localImgPaths.length,
-                imagesFailed: failedUrls.length,
                 ttsDuration: audioDuration.toFixed(2),
                 hasSrt,
-                language,
                 layout: `Header ${W}x${HEADER_H} (subtitle) | Image ${W}x${IMAGE_H} | Bottom ${W}x${BOTTOM_H} (title)`,
                 resolution: `${W}x${TOTAL_H}`,
                 mode: localImgPaths.length === 1 ? 'single-ken-burns' : `slideshow-${localImgPaths.length}imgs`
@@ -538,10 +521,10 @@ router.post('/', async (req, res) => {
     console.log(`\n╔══════════════════════════════════════════════════════╗`);
     console.log(`║ 🎬 HOOK V4 Job: ${job.id}`);
     console.log(`║ 📰 Title: "${title.substring(0, 50)}"`);
-    console.log(`║ 🌐 Language: ${lang}`);
     console.log(`║ 🖼️  Images: ${imageUrls.length} | Mode: ${imageUrls.length === 1 ? 'Ken Burns' : 'Slideshow'}`);
     console.log(`╚══════════════════════════════════════════════════════╝`);
 
+    // Trả về jobId ngay, xử lý nền
     res.status(202).json({
         success: true,
         jobId: job.id,
@@ -619,6 +602,7 @@ router.get('/:jobId/events', (req, res) => {
 
     const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
+    // Gửi trạng thái hiện tại ngay lập tức
     send({
         jobId: job.id,
         status: job.status,
