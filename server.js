@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const { Server } = require('socket.io');
 const config = require('./config');
+const { initWorkerSocket } = require('./sockets/workerSocket');
 
 const app = express();
 
@@ -9,7 +11,7 @@ const allowedOrigins = [
     'http://localhost:3000',
     'https://n8n2.xopboo.com',
     'https://admin.xopboo.com',
-    "https://image-collage-bice.vercel.app"
+    'https://image-collage-bice.vercel.app'
 ];
 
 app.use(cors({
@@ -31,6 +33,7 @@ app.use('/api/trim', require('./routes/trim'));
 app.use('/api/cover', require('./routes/cover'));
 const hookV2 = require('./routes/batchHookV5');
 app.use('/api/cover-v2', hookV2);
+
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
@@ -41,6 +44,21 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+const server = http.createServer(app);
+
+const io = new Server(server, {
+    cors: {
+        origin: allowedOrigins,
+        methods: ['GET', 'POST'],
+        credentials: true
+    },
+    path: '/socket.io'
+});
+
+const { workers, jobs } = initWorkerSocket(io);
+
+app.use('/api', require('./routes/bulk')({ workers, jobs }));
+
 app.use((err, req, res, next) => {
     console.error('💥 Express error:', err.message);
     res.status(500).json({
@@ -50,21 +68,22 @@ app.use((err, req, res, next) => {
     });
 });
 
-const server = http.createServer(app);
-
 server.requestTimeout = 0;
 server.headersTimeout = 0;
 server.keepAliveTimeout = 65000;
 
 server.listen(config.PORT, () => {
     console.log('╔══════════════════════════════════════╗');
-    console.log('║   🎬 Video Trimmer                   ║');
-    console.log(`║   🌐 http://localhost:${config.PORT}                   ║`);
-    console.log('║   ✂️  POST /api/trim                 ║');
+    console.log('║   🎬 Video Trimmer                  ║');
+    console.log(`║   🌐 http://localhost:${config.PORT}                  ║`);
+    console.log('║   ✂️  POST /api/trim                ║');
     console.log('║   📡 GET  /api/trim/:jobId          ║');
+    console.log('║   📥 POST /api/bulk                 ║');
+    console.log('║   📄 GET  /api/jobs/:jobId          ║');
+    console.log('║   👷 GET  /api/workers              ║');
     console.log('║   ❤️  GET  /api/health              ║');
     console.log(`║   🔑 ElevenLabs: ${config.ELEVENLABS_API_KEY !== 'YOUR_API_KEY_HERE' ? '✅ Configured' : '❌ Not set'} ║`);
-    console.log(`║   📤 Upload: ${config.UPLOAD_SERVICE}                  ║`);
+    console.log(`║   📤 Upload: ${config.UPLOAD_SERVICE}                 ║`);
     console.log('╚══════════════════════════════════════╝');
     console.log('\n🚀 Ready!\n');
 });
