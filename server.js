@@ -47,12 +47,12 @@ app.get('/api/health', (req, res) => {
 const server = http.createServer(app);
 
 const io = new Server(server, {
+    path: '/socket.io',
     cors: {
-        origin: allowedOrigins,
+        origin: true,
         methods: ['GET', 'POST'],
         credentials: true
-    },
-    path: '/socket.io'
+    }
 });
 
 const { workers, jobs } = initWorkerSocket(io);
