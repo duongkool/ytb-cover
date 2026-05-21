@@ -3,6 +3,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const config = require('./config');
+const { closeBrowser } = require('./utils/browserPool');
 const { initWorkerSocket } = require('./sockets/workerSocket');
 
 const app = express();
@@ -31,6 +32,10 @@ app.use(express.static('public'));
 
 app.use('/api/trim', require('./routes/trim'));
 app.use('/api/cover', require('./routes/cover'));
+app.use('/api/podcastHook', require('./routes/podcastHook'));
+app.use('/api/generatePodcastThumbnail', require('./routes/generatePodcastThumbnail'));
+
+
 const hookV2 = require('./routes/batchHookV5');
 app.use('/api/cover-v2', hookV2);
 
@@ -88,13 +93,46 @@ server.listen(config.PORT, () => {
     console.log('\n🚀 Ready!\n');
 });
 
-process.on('SIGTERM', () => process.exit(0));
-process.on('SIGINT', () => process.exit(0));
-process.on('uncaughtException', (err) => {
-    console.error('💥 Uncaught:', err.message);
+async function shutdown(signal) {
+    console.log(`\n⚠️ ${signal} received. Shutting down gracefully...`);
+
+    try {
+        await closeBrowser();
+    } catch (e) {
+        console.error('❌ Error closing browser:', e.message);
+    }
+
+    server.close(() => {
+        console.log('🛑 HTTP server closed');
+        process.exit(0);
+    });
+
+    // force kill nếu treo
+    setTimeout(() => {
+        console.error('💥 Force shutdown');
+        process.exit(1);
+    }, 5000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('uncaughtException', async (err) => {
+    console.error('💥 Uncaught Exception:', err);
+
+    try {
+        await closeBrowser();
+    } catch { }
+
     process.exit(1);
 });
-process.on('unhandledRejection', (reason) => {
-    console.error('💥 Unhandled:', reason);
+
+process.on('unhandledRejection', async (reason) => {
+    console.error('💥 Unhandled Rejection:', reason);
+
+    try {
+        await closeBrowser();
+    } catch { }
+
     process.exit(1);
 });
