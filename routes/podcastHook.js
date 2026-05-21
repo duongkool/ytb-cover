@@ -172,11 +172,15 @@ function saveBase64Image(base64, outputPath) {
 
 const RESULT_WEBHOOK_URL = 'https://n8n2.xopboo.com/webhook/result-video';
 
-async function sendResultWebhook(id, videoUrl) {
+async function sendResultWebhook(id, videoUrl, language = 'pt') {
     if (!id || !videoUrl) return null;
 
     try {
-        const payload = { id, videoUrl };
+        const payload = {
+            id: String(id).trim(),
+            videoUrl: String(videoUrl).trim(),
+            language: String(language || 'pt').trim(),
+        };
         const res = await axios.post(RESULT_WEBHOOK_URL, payload, {
             timeout: 30000,
             headers: {
@@ -517,7 +521,7 @@ async function processVideo(payload, jobId, onProgress = () => { }) {
         let webhookResult = null;
         if (id && String(id).trim()) {
             onProgress({ progress: 96, step: 'webhook', message: 'Đang gửi kết quả về webhook...' });
-            webhookResult = await sendResultWebhook(String(id).trim(), uploadResult.url);
+            webhookResult = await sendResultWebhook(String(id).trim(), uploadResult.url, language);
         }
 
         onProgress({ progress: 98, step: 'cleanup', message: 'Đang dọn file tạm...' });
