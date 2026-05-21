@@ -12,7 +12,6 @@ const { uploadVideo } = require('../utils/uploadMe');
 const execAsync = promisify(exec);
 const router = express.Router();
 
-// ─── Job store ────────────────────────────────────────────────────────────────
 const jobs = new Map();
 const jobEvents = new EventEmitter();
 jobEvents.setMaxListeners(1000);
@@ -27,7 +26,6 @@ if (!fs.existsSync(TEMP_DIR)) {
     fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function generateJobId() {
     return `podcast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -60,12 +58,8 @@ function createJob(payload) {
             id: payload?.id || '',
             content: payload?.content || '',
             title: payload?.title || '',
-            images: payload?.images || [],
+            imageUrl: payload?.imageUrl || '',
             language: payload?.language || 'pt',
-            badgeTop: payload?.badgeTop || 'HISTÓRIAS REAIS',
-            badgeBottom: payload?.badgeBottom || '',
-            episode: payload?.episode || 'EP.1',
-            footerBrand: payload?.footerBrand || 'DRAMACAST',
         },
         result: null,
         error: null,
@@ -154,20 +148,16 @@ async function getMediaDuration(filePath) {
     return duration;
 }
 
-// ─── Download ảnh ─────────────────────────────────────────────────────────────
 async function downloadImage(url, destPath) {
     const res = await axios.get(url, {
         responseType: 'arraybuffer',
-        timeout: 20000,
+        timeout: 30000,
+        headers: {
+            'User-Agent': 'Mozilla/5.0',
+        },
     });
     fs.writeFileSync(destPath, res.data);
     return destPath;
-}
-
-// ─── Save base64 ──────────────────────────────────────────────────────────────
-function saveBase64Image(base64, outputPath) {
-    const data = base64.replace(/^data:image\/\w+;base64,/, '');
-    fs.writeFileSync(outputPath, Buffer.from(data, 'base64'));
 }
 
 const RESULT_WEBHOOK_URL = 'https://n8n2.xopboo.com/webhook/result-video';
@@ -181,6 +171,7 @@ async function sendResultWebhook(id, videoUrl, language = 'pt') {
             videoUrl: String(videoUrl).trim(),
             language: String(language || 'pt').trim(),
         };
+
         const res = await axios.post(RESULT_WEBHOOK_URL, payload, {
             timeout: 30000,
             headers: {
@@ -205,7 +196,6 @@ async function sendResultWebhook(id, videoUrl, language = 'pt') {
     }
 }
 
-// ─── TTS retry ────────────────────────────────────────────────────────────────
 async function generateAudioWithRetry(content, audioPath, sessionId, maxRetries = 5, language = 'pt') {
     let lastError;
 
@@ -234,38 +224,6 @@ async function generateAudioWithRetry(content, audioPath, sessionId, maxRetries 
     throw new Error(`TTS failed after ${maxRetries} attempts: ${lastError.message}`);
 }
 
-// ─── Poster generator API call ────────────────────────────────────────────────
-async function generatePoster({
-    image,
-    title,
-    badgeTop,
-    badgeBottom,
-    episode,
-    footerBrand,
-}) {
-    const payload = {
-        image,
-        title,
-        badgeTop,
-        badgeBottom,
-        episode,
-        footerBrand,
-    };
-
-    const res = await axios.post(
-        'http://localhost:3000/api/generatePodcastThumbnail',
-        payload,
-        { timeout: 60000 }
-    );
-
-    if (!res.data?.success || !res.data?.base64) {
-        throw new Error(res.data?.error || 'Poster generation failed');
-    }
-
-    return res.data.base64;
-}
-
-// ─── SRT / ASS helpers ────────────────────────────────────────────────────────
 function srtTimeToAss(srtTime) {
     const [hms, ms] = srtTime.split(',');
     const [h, m, s] = hms.split(':');
@@ -401,7 +359,6 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     return assPath;
 }
 
-// ─── Burn subtitle top with ASS ───────────────────────────────────────────────
 async function burnTopSubtitle(videoPath, assPath, outputPath) {
     const assEscaped = assPath
         .replace(/\\/g, '/')
@@ -416,7 +373,6 @@ async function burnTopSubtitle(videoPath, assPath, outputPath) {
     return outputPath;
 }
 
-// ─── Create base video from poster + audio ───────────────────────────────────
 async function createPosterVideo(posterPath, audioPath, tempDir) {
     const rawPath = path.join(tempDir, 'poster_raw.mp4');
     const duration = await getMediaDuration(audioPath);
@@ -429,18 +385,13 @@ async function createPosterVideo(posterPath, audioPath, tempDir) {
     return rawPath;
 }
 
-// ─── CORE processVideo ────────────────────────────────────────────────────────
 async function processVideo(payload, jobId, onProgress = () => { }) {
     const {
         id,
         content,
         title,
-        images,
+        imageUrl,
         language = 'pt',
-        badgeTop,
-        badgeBottom,
-        episode,
-        footerBrand,
     } = payload;
 
     const tempDir = path.join(TEMP_DIR, jobId);
@@ -478,25 +429,8 @@ async function processVideo(payload, jobId, onProgress = () => { }) {
             }
         }
 
-        onProgress({ progress: 30, step: 'images', message: `Đang tải ${images.length} ảnh...` });
-        const localImgPaths = await Promise.all(
-            images.map((url, i) => downloadImage(url, path.join(tempDir, `img_${i}.jpg`)))
-        );
-
-        const mainImage = localImgPaths[0];
-        logFileState('main-image', mainImage);
-
-        onProgress({ progress: 45, step: 'poster', message: 'Đang tạo poster...' });
-        const posterBase64 = await generatePoster({
-            image: `file://${mainImage.replace(/\\/g, '/')}`,
-            title,
-            badgeTop,
-            badgeBottom,
-            episode,
-            footerBrand,
-        });
-
-        saveBase64Image(posterBase64, posterPath);
+        onProgress({ progress: 35, step: 'poster', message: 'Đang tải ảnh cover...' });
+        await downloadImage(imageUrl, posterPath);
         logFileState('poster-jpg', posterPath);
 
         onProgress({ progress: 65, step: 'render', message: 'Đang render video từ poster + audio...' });
@@ -532,17 +466,19 @@ async function processVideo(payload, jobId, onProgress = () => { }) {
         return {
             success: true,
             id,
+            title,
+            imageUrl,
             videoUrl: uploadResult.url,
             uploadService: uploadResult.service,
             permanent: uploadResult.permanent || false,
             webhookSent: !!(id && String(id).trim()),
             webhookResult,
             metadata: {
-                imageCount: images.length,
                 ttsDuration: audioDuration.toFixed(2),
                 hasSubtitle: hasSub,
                 resolution: `${W}x${H}`,
-                layout: 'Poster static + top ASS subtitle + audio',
+                layout: 'Static poster from URL + top ASS subtitle + audio',
+                language,
             },
         };
     } catch (error) {
@@ -551,7 +487,6 @@ async function processVideo(payload, jobId, onProgress = () => { }) {
     }
 }
 
-// ─── Background job runner ────────────────────────────────────────────────────
 async function runJob(jobId) {
     const job = getJob(jobId);
     if (!job) return;
@@ -592,18 +527,13 @@ async function runJob(jobId) {
     }
 }
 
-// ─── POST / ───────────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
     const {
         id,
         content,
         title,
-        images,
+        imageUrl,
         language,
-        badgeTop,
-        badgeBottom,
-        episode,
-        footerBrand,
     } = req.body || {};
 
     if (!content || typeof content !== 'string' || content.trim().length < 10) {
@@ -614,15 +544,8 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ success: false, error: 'title (string) required' });
     }
 
-    let imageUrls = [];
-    if (typeof images === 'string') {
-        imageUrls = [images];
-    } else if (Array.isArray(images)) {
-        imageUrls = images.filter(u => typeof u === 'string' && (u.startsWith('http') || u.startsWith('https')));
-    }
-
-    if (imageUrls.length === 0) {
-        return res.status(400).json({ success: false, error: 'images (string or array of URLs) required' });
+    if (!imageUrl || typeof imageUrl !== 'string' || !/^https?:\/\//i.test(imageUrl)) {
+        return res.status(400).json({ success: false, error: 'imageUrl (http/https) required' });
     }
 
     const SUPPORTED_LANGUAGES = ['en', 'pt', 'es', 'de', 'jp'];
@@ -632,18 +555,14 @@ router.post('/', async (req, res) => {
         id: id || '',
         content,
         title,
-        images: imageUrls,
+        imageUrl,
         language: lang,
-        badgeTop,
-        badgeBottom,
-        episode,
-        footerBrand,
     });
 
     console.log(`\n╔══════════════════════════════════════════════════════╗`);
     console.log(`║ 🎙️ PODCAST Job: ${job.id}`);
     console.log(`║ 📰 Title: "${title.substring(0, 50)}"`);
-    console.log(`║ 🖼️ Images: ${imageUrls.length}`);
+    console.log(`║ 🖼️ Poster: ${imageUrl}`);
     console.log(`╚══════════════════════════════════════════════════════╝`);
 
     res.status(202).json({
@@ -671,7 +590,6 @@ router.post('/', async (req, res) => {
     });
 });
 
-// ─── GET /:jobId ──────────────────────────────────────────────────────────────
 router.get('/:jobId', (req, res) => {
     const job = getJob(req.params.jobId);
 
@@ -695,7 +613,6 @@ router.get('/:jobId', (req, res) => {
     });
 });
 
-// ─── DELETE /:jobId ───────────────────────────────────────────────────────────
 router.delete('/:jobId', (req, res) => {
     const job = getJob(req.params.jobId);
 
@@ -707,7 +624,6 @@ router.delete('/:jobId', (req, res) => {
     return res.json({ success: true, message: 'Job deleted' });
 });
 
-// ─── GET /:jobId/events ───────────────────────────────────────────────────────
 router.get('/:jobId/events', (req, res) => {
     const jobId = req.params.jobId;
     const job = getJob(jobId);
