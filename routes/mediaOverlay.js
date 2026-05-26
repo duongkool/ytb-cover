@@ -10,18 +10,14 @@ const { uploadVideo } = require("../utils/uploadMe");
 const execAsync = promisify(exec);
 const router = express.Router();
 
-const W = 720;
-const H = 1280;
+const DEFAULT_W = 720;
+const DEFAULT_H = 1280;
 const TEMP_DIR = path.join(__dirname, "..", "temp");
+const BG_VIDEO_FILE = path.join(__dirname, "..", "video1.mp4");
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
-
-const FONT_FILE = path
-  .join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf")
-  .replace(/\\/g, "/")
-  .replace(/^([A-Z]):/, (_, d) => `${d}\\:`);
 
 function generateJobId() {
   return `simple_media_overlay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -38,22 +34,6 @@ function cleanupTempDir(tempDir) {
   }
 }
 
-function escapeDrawtext(text) {
-  return String(text || "")
-    .replace(/\\/g, "\\\\\\\\")
-    .replace(/'/g, "’")
-    .replace(/"/g, '\\"')
-    .replace(/:/g, "\\\\:")
-    .replace(/,/g, "\\\\,")
-    .replace(/;/g, "\\\\;")
-    .replace(/\[/g, "\\\\[")
-    .replace(/\]/g, "\\\\]")
-    .replace(/\(/g, "\\\\(")
-    .replace(/\)/g, "\\\\)")
-    .replace(/=/g, "\\\\=")
-    .replace(/%/g, "\\\\%")
-    .replace(/\n/g, " ");
-}
 function normalizeText(text) {
   return String(text || "")
     .replace(/\s+/g, " ")
@@ -63,7 +43,18 @@ function normalizeText(text) {
 function clampContent(text, maxChars = 500) {
   const clean = normalizeText(text);
   if (clean.length <= maxChars) return clean;
-  return clean.slice(0, maxChars).replace(/[ .,!?:;"'”-]+$/, "") + "...";
+
+  const cutoff = maxChars - 3;
+  if (cutoff <= 0) return "...";
+
+  const slice = clean.slice(0, cutoff + 1);
+  const lastSpace = slice.lastIndexOf(" ");
+
+  if (lastSpace > 0) {
+    return slice.slice(0, lastSpace).replace(/[ .,!?:;"'”-]+$/, "") + "...";
+  }
+
+  return clean.slice(0, cutoff).replace(/[ .,!?:;"'”-]+$/, "") + "...";
 }
 
 function wrapTextMobile(text, maxCharsPerLine = 44, maxLines = 13) {
@@ -76,6 +67,7 @@ function wrapTextMobile(text, maxCharsPerLine = 44, maxLines = 13) {
 
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
+
     if (next.length <= maxCharsPerLine) {
       current = next;
     } else {
@@ -143,6 +135,19 @@ async function getImageDimensions(filePath) {
   return { width, height };
 }
 
+async function getVideoDimensions(filePath) {
+  const { stdout } = await execAsync(
+    `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${filePath}"`,
+    { maxBuffer: 20 * 1024 * 1024 },
+  );
+
+  const [width, height] = stdout.trim().split("x").map(Number);
+  if (!width || !height) {
+    throw new Error(`Cannot get video dimensions: ${filePath}`);
+  }
+  return { width, height };
+}
+
 async function getMediaDuration(filePath) {
   const { stdout } = await execAsync(
     `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
@@ -159,15 +164,14 @@ async function getMediaDuration(filePath) {
 async function createVideoFromImage(imagePath, outputPath, seconds) {
   const { width, height } = await getImageDimensions(imagePath);
 
-  const WORK_W = W * 2;
-  const WORK_H = H * 2;
+  const WORK_W = DEFAULT_W * 2;
+  const WORK_H = DEFAULT_H * 2;
 
   const scaleFactor = Math.max(WORK_W / width, WORK_H / height);
   const scaledW = Math.ceil(width * scaleFactor);
   const scaledH = Math.ceil(height * scaleFactor);
 
   const panRange = Math.max(scaledW - WORK_W, 0);
-
   const usablePan = Math.max(0, Math.floor(panRange * 0.35));
   const startX = Math.max(0, Math.floor((panRange - usablePan) / 2));
 
@@ -177,7 +181,7 @@ async function createVideoFromImage(imagePath, outputPath, seconds) {
   const vf = [
     `scale=${scaledW}:${scaledH}`,
     `crop=${WORK_W}:${WORK_H}:${xExpr}:0`,
-    `scale=${W}:${H}`,
+    `scale=${DEFAULT_W}:${DEFAULT_H}`,
     `fps=60`,
     `format=yuv420p`,
   ].join(",");
@@ -194,8 +198,8 @@ async function createVideoFromImage(imagePath, outputPath, seconds) {
 
 async function createVideoFromSourceVideo(videoPath, outputPath, seconds) {
   const vf = [
-    `scale=${W}:${H}:force_original_aspect_ratio=increase`,
-    `crop=${W}:${H}`,
+    `scale=${DEFAULT_W}:${DEFAULT_H}:force_original_aspect_ratio=increase`,
+    `crop=${DEFAULT_W}:${DEFAULT_H}`,
     `fps=30`,
     `format=yuv420p`,
   ].join(",");
@@ -216,7 +220,7 @@ async function addTextOverlay(inputPath, outputPath, content, tempDir) {
 
   const boxX = 28;
   const boxY = 610;
-  const boxW = W - 56;
+  const boxW = DEFAULT_W - 56;
   const boxH = 460;
 
   const textAreaW = 610;
@@ -274,6 +278,106 @@ async function addTextOverlay(inputPath, outputPath, content, tempDir) {
   return outputPath;
 }
 
+async function createImageBackgroundLayout({
+  imagePath,
+  backgroundVideoPath,
+  outputPath,
+  content,
+  seconds,
+  tempDir,
+  canvasW,
+  canvasH,
+}) {
+  const clippedContent = clampContent(content, 800);
+  const lines = wrapTextMobile(clippedContent, 40, 12);
+
+  const IMAGE_TOP_Y = 0;
+  const IMAGE_MAX_H = Math.round(canvasH * 0.42);
+  const OVERLAP_DOWN = Math.max(14, Math.round(canvasH * 0.016));
+
+  const actualImageBottomY = IMAGE_TOP_Y + IMAGE_MAX_H;
+  const textBoxY =
+    actualImageBottomY - OVERLAP_DOWN + Math.round(canvasH * 0.01);
+
+  const textBoxX = Math.round(canvasW * 0.05);
+  const textBoxW = canvasW - textBoxX * 2;
+
+  const fontSize = Math.max(16, Math.round(canvasW * 0.034));
+  const lineHeight = Math.round(fontSize * 1.42);
+
+  const topPadding = Math.max(22, Math.round(canvasH * 0.026));
+  const bottomPadding = Math.max(26, Math.round(canvasH * 0.032));
+  const sidePadding = Math.max(18, Math.round(canvasW * 0.04));
+  const extraSafety = Math.max(18, Math.round(fontSize * 0.8));
+
+  const totalTextH = lines.length * lineHeight;
+
+  const textBoxH = Math.max(
+    Math.round(canvasH * 0.19),
+    Math.min(
+      Math.round(canvasH * 0.41),
+      totalTextH + topPadding + bottomPadding + extraSafety,
+    ),
+  );
+
+  const textAreaW = textBoxW - sidePadding * 2;
+  const textAreaX = textBoxX + sidePadding;
+
+  const startY =
+    textBoxY +
+    topPadding +
+    Math.max(
+      0,
+      Math.floor((textBoxH - topPadding - bottomPadding - totalTextH) / 2),
+    );
+
+  const normalizeForTextfile = (text) =>
+    String(text || "")
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/\r?\n/g, " ")
+      .trim();
+
+  const escapeFilterPath = (filePath) =>
+    filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+
+  const fontPathEscaped = escapeFilterPath(
+    path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
+  );
+
+  const drawLines = lines.map((line, i) => {
+    const y = startY + i * lineHeight;
+    const txtPath = path.join(tempDir, `bg_line_${i + 1}.txt`);
+    fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
+    const txtPathEscaped = escapeFilterPath(txtPath);
+
+    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.7`;
+  });
+
+  const filter = [
+    `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease[bgfit]`,
+    `color=c=black:s=${canvasW}x${canvasH}[canvas]`,
+    `[canvas][bgfit]overlay=(W-w)/2:(H-h)/2[bg]`,
+    `[1:v]scale=${canvasW}:-2[imgscaled]`,
+    `[imgscaled]crop=${canvasW}:'min(ih,${IMAGE_MAX_H})':0:'max((ih-${IMAGE_MAX_H})/2,0)'[imgcropped]`,
+    `[bg][imgcropped]overlay=0:${IMAGE_TOP_Y}[base1]`,
+    `[base1]drawbox=x=${textBoxX}:y=${textBoxY}:w=${textBoxW}:h=${textBoxH}:color=black@0.72:t=fill[base2]`,
+    `[base2]${drawLines.join(",")}[v]`,
+  ].join(";");
+
+  const filterFile = path.join(tempDir, "bg_layout_filter.txt");
+  fs.writeFileSync(filterFile, filter, "utf8");
+
+  const cmd = `ffmpeg -y -stream_loop -1 -i "${backgroundVideoPath}" -loop 1 -i "${imagePath}" -filter_complex_script "${filterFile}" -map "[v]" -t ${seconds} -an -c:v libx264 -preset medium -crf 21 -pix_fmt yuv420p "${outputPath}"`;
+  await runCommand(cmd, "create-image-background-layout");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("createImageBackgroundLayout failed");
+  }
+
+  return outputPath;
+}
+
 async function muxWithAudio(videoPath, audioPath, outputPath, seconds) {
   const cmd = `ffmpeg -y -stream_loop -1 -i "${audioPath}" -i "${videoPath}" -map 1:v:0 -map 0:a:0 -t ${seconds} -c:v copy -c:a aac -b:a 128k "${outputPath}"`;
   await runCommand(cmd, "mux-with-audio");
@@ -289,8 +393,9 @@ router.post("/", async (req, res) => {
   const {
     url,
     content,
-    second = 10,
+    second,
     type = "image",
+    option,
     audioPath: customAudioPath,
   } = req.body || {};
 
@@ -311,13 +416,31 @@ router.post("/", async (req, res) => {
     });
   }
 
-  const seconds = Math.max(3, Number(second) || 10);
   const jobId = generateJobId();
   const tempDir = path.join(TEMP_DIR, jobId);
-
   fs.mkdirSync(tempDir, { recursive: true });
 
+  let outputW = DEFAULT_W;
+  let outputH = DEFAULT_H;
+
   try {
+    let seconds;
+
+    if (
+      second !== undefined &&
+      second !== null &&
+      String(second).trim() !== ""
+    ) {
+      seconds = Math.max(3, Number(second) || 10);
+    } else if (type === "image" && option === "background") {
+      if (!fs.existsSync(BG_VIDEO_FILE)) {
+        throw new Error("Missing background video: video1.mp4");
+      }
+      seconds = Math.max(3, await getMediaDuration(BG_VIDEO_FILE));
+    } else {
+      seconds = 10;
+    }
+
     const sourcePath = path.join(
       tempDir,
       type === "video" ? "source.mp4" : "source.jpg",
@@ -330,11 +453,35 @@ router.post("/", async (req, res) => {
 
     if (type === "video") {
       await createVideoFromSourceVideo(sourcePath, baseVideoPath, seconds);
+      await addTextOverlay(baseVideoPath, overlayVideoPath, content, tempDir);
+      outputW = DEFAULT_W;
+      outputH = DEFAULT_H;
+    } else if (option === "background") {
+      if (!fs.existsSync(BG_VIDEO_FILE)) {
+        throw new Error("Missing background video: video1.mp4");
+      }
+
+      const { width: canvasW, height: canvasH } =
+        await getVideoDimensions(BG_VIDEO_FILE);
+      outputW = canvasW;
+      outputH = canvasH;
+
+      await createImageBackgroundLayout({
+        imagePath: sourcePath,
+        backgroundVideoPath: BG_VIDEO_FILE,
+        outputPath: overlayVideoPath,
+        content,
+        seconds,
+        tempDir,
+        canvasW,
+        canvasH,
+      });
     } else {
       await createVideoFromImage(sourcePath, baseVideoPath, seconds);
+      await addTextOverlay(baseVideoPath, overlayVideoPath, content, tempDir);
+      outputW = DEFAULT_W;
+      outputH = DEFAULT_H;
     }
-
-    await addTextOverlay(baseVideoPath, overlayVideoPath, content, tempDir);
 
     let audioToUse = customAudioPath;
     if (!audioToUse) {
@@ -367,8 +514,6 @@ router.post("/", async (req, res) => {
       throw new Error("Upload failed");
     }
 
-    cleanupTempDir(tempDir);
-
     const finalRenderedText = wrapTextMobile(content, 44, 13).join(" ");
 
     return res.json({
@@ -378,24 +523,28 @@ router.post("/", async (req, res) => {
       service: uploadResult.service,
       permanent: uploadResult.permanent || false,
       metadata: {
-        duration: seconds,
-        resolution: `${W}x${H}`,
+        duration: Number(Number(seconds).toFixed(2)),
+        resolution: `${outputW}x${outputH}`,
         type,
+        option: option || null,
         maxCharsInBox: 500,
         renderedChars: finalRenderedText.length,
         renderedLines: wrapTextMobile(content, 44, 13).length,
         layout:
           type === "video"
             ? "source video + portrait crop + bold text box + random looping audio"
-            : "single image + bigger bold paragraph text + wider text area + slow horizontal pan + random looping audio",
+            : option === "background"
+              ? "original-size background video + top foreground image + dynamic text box + random looping audio"
+              : "single image + bigger bold paragraph text + wider text area + slow horizontal pan + random looping audio",
       },
     });
   } catch (error) {
-    cleanupTempDir(tempDir);
     return res.status(500).json({
       success: false,
       error: error.message || "Unknown error",
     });
+  } finally {
+    cleanupTempDir(tempDir);
   }
 });
 
