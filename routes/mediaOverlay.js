@@ -40,16 +40,20 @@ function cleanupTempDir(tempDir) {
 
 function escapeDrawtext(text) {
   return String(text || "")
-    .replace(/\\/g, "\\\\")
+    .replace(/\\/g, "\\\\\\\\")
     .replace(/'/g, "’")
-    .replace(/:/g, "\\:")
-    .replace(/,/g, "\\,")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/%/g, "\\%")
+    .replace(/"/g, '\\"')
+    .replace(/:/g, "\\\\:")
+    .replace(/,/g, "\\\\,")
+    .replace(/;/g, "\\\\;")
+    .replace(/\[/g, "\\\\[")
+    .replace(/\]/g, "\\\\]")
+    .replace(/\(/g, "\\\\(")
+    .replace(/\)/g, "\\\\)")
+    .replace(/=/g, "\\\\=")
+    .replace(/%/g, "\\\\%")
     .replace(/\n/g, " ");
 }
-
 function normalizeText(text) {
   return String(text || "")
     .replace(/\s+/g, " ")
@@ -206,7 +210,7 @@ async function createVideoFromSourceVideo(videoPath, outputPath, seconds) {
   return outputPath;
 }
 
-async function addTextOverlay(inputPath, outputPath, content) {
+async function addTextOverlay(inputPath, outputPath, content, tempDir) {
   const clippedContent = clampContent(content, 500);
   const lines = wrapTextMobile(clippedContent, 44, 13);
 
@@ -228,20 +232,39 @@ async function addTextOverlay(inputPath, outputPath, content) {
   const startY =
     boxY + topPadding + Math.max(0, Math.floor((availableH - totalTextH) / 2));
 
-  const drawLines = lines
-    .map((line, i) => {
-      const safeLine = escapeDrawtext(line);
-      const y = startY + i * lineHeight;
-      return `drawtext=fontfile='${FONT_FILE}':text='${safeLine}':fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.6`;
-    })
-    .join(",");
+  const normalizeForTextfile = (text) =>
+    String(text || "")
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/\r?\n/g, " ")
+      .trim();
+
+  const escapeFilterPath = (filePath) =>
+    filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+
+  const fontPathEscaped = escapeFilterPath(
+    path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
+  );
+
+  const drawLines = lines.map((line, i) => {
+    const y = startY + i * lineHeight;
+    const txtPath = path.join(tempDir, `line_${i + 1}.txt`);
+    fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
+
+    const txtPathEscaped = escapeFilterPath(txtPath);
+
+    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.6`;
+  });
 
   const filter = [
     `drawbox=x=${boxX}:y=${boxY}:w=${boxW}:h=${boxH}:color=black@0.72:t=fill`,
-    drawLines,
+    ...drawLines,
   ].join(",");
 
-  const cmd = `ffmpeg -y -i "${inputPath}" -vf "${filter}" -an -c:v libx264 -preset medium -crf 22 -pix_fmt yuv420p "${outputPath}"`;
+  const filterFile = path.join(tempDir, "overlay_filter.txt");
+  fs.writeFileSync(filterFile, filter, "utf8");
+
+  const cmd = `ffmpeg -y -i "${inputPath}" -filter_script:v "${filterFile}" -an -c:v libx264 -preset medium -crf 22 -pix_fmt yuv420p "${outputPath}"`;
   await runCommand(cmd, "add-text-overlay");
 
   if (!fs.existsSync(outputPath)) {
@@ -311,7 +334,7 @@ router.post("/", async (req, res) => {
       await createVideoFromImage(sourcePath, baseVideoPath, seconds);
     }
 
-    await addTextOverlay(baseVideoPath, overlayVideoPath, content);
+    await addTextOverlay(baseVideoPath, overlayVideoPath, content, tempDir);
 
     let audioToUse = customAudioPath;
     if (!audioToUse) {
