@@ -35,6 +35,7 @@ app.use("/api/trim", require("./routes/trim"));
 app.use("/api/cover", require("./routes/cover"));
 app.use("/api/podcastHook", require("./routes/podcastHook"));
 app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
+app.use("/api/overlay-image", require("./routes/overlayImage"));
 const hookV2 = require("./routes/batchHookV5");
 app.use("/api/cover-v2", hookV2);
 
