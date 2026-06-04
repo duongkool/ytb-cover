@@ -5,7 +5,7 @@ const axios = require("axios");
 const { promisify } = require("util");
 const { exec } = require("child_process");
 
-const { uploadVideo } = require("../utils/uploadService");
+const { uploadVideo } = require("../utils/uploadMedianet");
 
 const execAsync = promisify(exec);
 const router = express.Router();
@@ -92,10 +92,12 @@ async function composeImageOnBackground({
   const marginTop = 10;
   const targetW = canvasW - marginX * 2;
 
+  const cornerRadius = 24;
+
   const filter = [
     `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}[bg]`,
-    `[1:v]scale=${targetW}:-2[fg]`,
-    `[bg][fg]overlay=${marginX}:${marginTop}[v]`,
+    `[1:v]scale=${targetW}:-2,format=yuva420p,geq=lum='p(X,Y)':a='if(gt(abs(W/2-X),W/2-${cornerRadius})*gt(abs(H/2-Y),H/2-${cornerRadius}),if(lte(hypot(${cornerRadius}-(W/2-abs(W/2-X)),${cornerRadius}-(H/2-abs(H/2-Y))),${cornerRadius}),255,0),255)'[fg]`,
+    `[bg][fg]overlay=${marginX}:${marginTop}:format=auto[v]`,
   ].join(";");
 
   const cmd = `ffmpeg -y \
