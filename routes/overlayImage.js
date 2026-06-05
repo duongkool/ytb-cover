@@ -60,6 +60,7 @@ function createJob(payload) {
     payload: {
       imageUrl: payload.imageUrl,
       audioUrl: payload.audioUrl,
+      backgroundUrl: payload.backgroundUrl || null,
       seconds: payload.seconds,
     },
     result: null,
@@ -197,18 +198,19 @@ async function processVideo(jobId, onProgress = () => {}) {
     throw new Error("Job not found");
   }
 
-  const { imageUrl, audioUrl, seconds } = job.payload;
+  const { imageUrl, audioUrl, backgroundUrl, seconds } = job.payload;
 
   const tempDir = path.join(TEMP_DIR, jobId);
   fs.mkdirSync(tempDir, { recursive: true });
 
   try {
-    if (!fs.existsSync(BG_VIDEO_FILE)) {
+    if (!backgroundUrl && !fs.existsSync(BG_VIDEO_FILE)) {
       throw new Error("Missing background video: us.mp4");
     }
 
     const imagePath = path.join(tempDir, "image.jpg");
     const audioPath = path.join(tempDir, "audio.mp3");
+    const downloadedBgPath = path.join(tempDir, "background.mp4");
     const finalPath = path.join(tempDir, "final.mp4");
 
     onProgress({
@@ -219,19 +221,31 @@ async function processVideo(jobId, onProgress = () => {}) {
     await downloadFile(imageUrl, imagePath);
 
     onProgress({
-      progress: 25,
+      progress: 22,
       step: "download",
       message: "Đang tải audio...",
     });
     await downloadFile(audioUrl, audioPath);
 
+    let backgroundVideoPath = BG_VIDEO_FILE;
+
+    if (backgroundUrl) {
+      onProgress({
+        progress: 34,
+        step: "download",
+        message: "Đang tải background video...",
+      });
+      await downloadFile(backgroundUrl, downloadedBgPath);
+      backgroundVideoPath = downloadedBgPath;
+    }
+
     onProgress({
-      progress: 40,
+      progress: 45,
       step: "probe",
       message: "Đang phân tích video nền...",
     });
     const { width: canvasW, height: canvasH } =
-      await getVideoDimensions(BG_VIDEO_FILE);
+      await getVideoDimensions(backgroundVideoPath);
 
     onProgress({
       progress: 65,
@@ -239,7 +253,7 @@ async function processVideo(jobId, onProgress = () => {}) {
       message: "Đang render video...",
     });
     await composeImageOnBackground({
-      backgroundVideoPath: BG_VIDEO_FILE,
+      backgroundVideoPath,
       imagePath,
       audioPath,
       outputPath: finalPath,
@@ -253,10 +267,9 @@ async function processVideo(jobId, onProgress = () => {}) {
       step: "upload",
       message: "Đang upload video...",
     });
-    const uploadResult = await uploadVideo(
-      finalPath,
-      `bg_image_audio_${jobId}.mp4`,
-    );
+    const shortName = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.mp4`;
+
+    const uploadResult = await uploadVideo(finalPath, shortName);
 
     if (!uploadResult?.url) {
       throw new Error("Upload failed");
@@ -283,6 +296,7 @@ async function processVideo(jobId, onProgress = () => {}) {
       metadata: {
         duration: Number(Number(seconds).toFixed(2)),
         resolution: `${canvasW}x${canvasH}`,
+        backgroundSource: backgroundUrl ? "remote_url" : "default_local",
         layout: "background video + full overlay image + looped external audio",
       },
     };
@@ -338,7 +352,7 @@ async function runJob(jobId) {
 
 // ─── POST / — tạo job mới ────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
-  const { imageUrl, audioUrl, seconds } = req.body || {};
+  const { imageUrl, audioUrl, backgroundUrl, seconds } = req.body || {};
 
   if (!imageUrl || typeof imageUrl !== "string") {
     return res.status(400).json({
@@ -354,6 +368,13 @@ router.post("/", async (req, res) => {
     });
   }
 
+  if (backgroundUrl != null && typeof backgroundUrl !== "string") {
+    return res.status(400).json({
+      success: false,
+      error: "backgroundUrl must be a string",
+    });
+  }
+
   const duration = Number(seconds);
   if (!Number.isFinite(duration) || duration <= 0) {
     return res.status(400).json({
@@ -365,6 +386,7 @@ router.post("/", async (req, res) => {
   const job = createJob({
     imageUrl,
     audioUrl,
+    backgroundUrl,
     seconds: duration,
   });
 
@@ -372,6 +394,9 @@ router.post("/", async (req, res) => {
   console.log(`║ 🎬 BG IMAGE AUDIO Job: ${job.id}`);
   console.log(`║ 🖼️  Image: ${imageUrl.substring(0, 60)}`);
   console.log(`║ 🎵 Audio: ${audioUrl.substring(0, 60)}`);
+  console.log(
+    `║ 🎞️  Background: ${(backgroundUrl || "DEFAULT_LOCAL_BG").substring(0, 60)}`,
+  );
   console.log(`║ ⏱️  Seconds: ${duration}`);
   console.log(`╚══════════════════════════════════════════════════════╝`);
 
