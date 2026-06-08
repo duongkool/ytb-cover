@@ -16,7 +16,7 @@ const jobs = new Map();
 const jobEvents = new EventEmitter();
 jobEvents.setMaxListeners(1000);
 
-const JOB_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 const TEMP_DIR = path.join(__dirname, "..", "temp");
@@ -28,7 +28,9 @@ if (!fs.existsSync(TEMP_DIR)) {
 
 // ─── Helpers: Job ─────────────────────────────────────────────────────────────
 function generateJobId() {
-  return `bg_image_audio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `bg_image_audio_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }
 
 function getJob(jobId) {
@@ -58,10 +60,15 @@ function createJob(payload) {
     startedAt: null,
     finishedAt: null,
     payload: {
+      mode: payload.mode || "single",
       imageUrl: payload.imageUrl,
+      slideImageUrls: payload.slideImageUrls || [],
+      slideSeconds: payload.slideSeconds || null,
+      slideLayout: payload.slideLayout || null,
       audioUrl: payload.audioUrl,
       backgroundUrl: payload.backgroundUrl || null,
       seconds: payload.seconds,
+      fullAudio: Boolean(payload.fullAudio),
     },
     result: null,
     error: null,
@@ -106,6 +113,7 @@ async function runCommand(cmd, label) {
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       maxBuffer: 1024 * 1024 * 300,
+      shell: true,
     });
 
     if (stdout?.trim()) console.log(`[${label}] stdout:\n${stdout}`);
@@ -125,10 +133,22 @@ async function downloadFile(url, destPath) {
   const res = await axios.get(url, {
     responseType: "arraybuffer",
     timeout: 30000,
+    validateStatus: (status) => status >= 200 && status < 300,
   });
 
   fs.writeFileSync(destPath, res.data);
   return destPath;
+}
+
+async function tryDownloadFile(url, destPath) {
+  try {
+    await downloadFile(url, destPath);
+    return true;
+  } catch (error) {
+    console.warn(`⚠️ Download failed: ${url}`);
+    console.warn(`⚠️ Reason: ${error.message}`);
+    return false;
+  }
 }
 
 async function getVideoDimensions(filePath) {
@@ -143,6 +163,25 @@ async function getVideoDimensions(filePath) {
   }
 
   return { width, height };
+}
+
+async function getMediaDuration(filePath) {
+  const { stdout } = await execAsync(
+    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+    { maxBuffer: 20 * 1024 * 1024 },
+  );
+
+  const duration = Number(String(stdout).trim());
+
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Cannot get media duration: ${filePath}`);
+  }
+
+  return duration;
+}
+
+function makeEven(value) {
+  return Math.max(2, Math.round(Number(value) / 2) * 2);
 }
 
 async function composeImageOnBackground({
@@ -165,27 +204,120 @@ async function composeImageOnBackground({
     `[bg][fg]overlay=${marginX}:${marginTop}:format=auto[v]`,
   ].join(";");
 
-  const cmd = `ffmpeg -y \
--stream_loop -1 -i "${backgroundVideoPath}" \
--loop 1 -i "${imagePath}" \
--stream_loop -1 -i "${audioPath}" \
--filter_complex "${filter}" \
--map "[v]" \
--map 2:a:0 \
--t ${seconds} \
--c:v libx264 \
--preset medium \
--crf 21 \
--c:a aac \
--b:a 128k \
--pix_fmt yuv420p \
--shortest \
-"${outputPath}"`;
+  const cmd = `ffmpeg -y -stream_loop -1 -i "${backgroundVideoPath}" -loop 1 -i "${imagePath}" -stream_loop -1 -i "${audioPath}" -filter_complex "${filter}" -map "[v]" -map 2:a:0 -t ${seconds} -c:v libx264 -preset medium -crf 21 -c:a aac -b:a 128k -pix_fmt yuv420p -shortest "${outputPath}"`;
 
   await runCommand(cmd, "compose-image-on-background");
 
   if (!fs.existsSync(outputPath)) {
     throw new Error("composeImageOnBackground failed");
+  }
+
+  return outputPath;
+}
+
+async function composeSlideOnBackground({
+  backgroundVideoPath,
+  overlayImagePath,
+  slideImagePaths,
+  audioPath,
+  outputPath,
+  seconds,
+  slideSeconds,
+  slideLayout,
+  canvasW,
+  canvasH,
+}) {
+  const marginX = 10;
+  const marginTop = 10;
+  const targetW = canvasW - marginX * 2;
+  const cornerRadius = 24;
+
+  const sourceW = Number(slideLayout?.sourceWidth) || 1440;
+  const imageX = Number(slideLayout?.imageX) || 0;
+  const imageY = Number(slideLayout?.imageY) || 0;
+  const imageW = Number(slideLayout?.imageWidth) || 1440;
+  const imageH = Number(slideLayout?.imageHeight) || 840;
+
+  const scaleRatio = targetW / sourceW;
+  const slotX = marginX + Math.round(imageX * scaleRatio);
+  const slotY = marginTop + Math.round(imageY * scaleRatio);
+  const slotW = makeEven(imageW * scaleRatio);
+  const slotH = makeEven(imageH * scaleRatio);
+
+  const fps = 30;
+  const transitionDuration = 0.5;
+  const normalizedSlideSeconds = Math.max(
+    transitionDuration + 0.2,
+    Number(slideSeconds) || 4,
+  );
+
+  const totalSlides = slideImagePaths.length;
+  const slideVideoPath = path.join(path.dirname(outputPath), "slides.mp4");
+
+  const roundedAlpha = (radius) =>
+    `geq=lum='p(X,Y)':a='if(gt(abs(W/2-X),W/2-${radius})*gt(abs(H/2-Y),H/2-${radius}),if(lte(hypot(${radius}-(W/2-abs(W/2-X)),${radius}-(H/2-abs(H/2-Y))),${radius}),255,0),255)'`;
+
+  const slideInputs = slideImagePaths
+    .map(
+      (slidePath) => `-loop 1 -t ${normalizedSlideSeconds} -i "${slidePath}"`,
+    )
+    .join(" ");
+
+  const slideFilters = [];
+
+  for (let i = 0; i < totalSlides; i += 1) {
+    const outLabel = i === 0 ? "v0src" : `v${i}`;
+    slideFilters.push(
+      `[${i}:v]trim=duration=${normalizedSlideSeconds},setpts=PTS-STARTPTS,scale=${slotW}:${slotH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${slotW}:${slotH}:(ow-iw)/2:(oh-ih)/2:color=black,fps=${fps},setsar=1,format=yuv420p[${outLabel}]`,
+    );
+  }
+
+  slideFilters.push(`[v0src]split=2[v0][v0loop]`);
+
+  let lastLabel = "v0";
+  let currentOffset = normalizedSlideSeconds - transitionDuration;
+
+  for (let i = 1; i < totalSlides; i += 1) {
+    const outLabel = `xf${i}`;
+    slideFilters.push(
+      `[${lastLabel}][v${i}]xfade=transition=fade:duration=${transitionDuration}:offset=${currentOffset}[${outLabel}]`,
+    );
+    lastLabel = outLabel;
+    currentOffset += normalizedSlideSeconds - transitionDuration;
+  }
+
+  slideFilters.push(
+    `[${lastLabel}][v0loop]xfade=transition=fade:duration=${transitionDuration}:offset=${currentOffset}[slidesloop]`,
+  );
+
+  slideFilters.push(
+    `[slidesloop]trim=duration=${seconds},setpts=PTS-STARTPTS[slidesout]`,
+  );
+
+  const slideFilter = slideFilters.join(";");
+
+  const slideCmd = `ffmpeg -y ${slideInputs} -filter_complex "${slideFilter}" -map "[slidesout]" -r ${fps} -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "${slideVideoPath}"`;
+
+  await runCommand(slideCmd, "build-slide-video");
+
+  if (!fs.existsSync(slideVideoPath)) {
+    throw new Error("Failed to build slideshow video");
+  }
+
+  const finalFilter = [
+    `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}[bg]`,
+    `[1:v]scale=${targetW}:-2,format=yuva420p,${roundedAlpha(cornerRadius)}[base]`,
+    `[2:v]scale=${slotW}:${slotH},setsar=1,format=yuva420p,${roundedAlpha(cornerRadius)}[slides]`,
+    `[bg][base]overlay=${marginX}:${marginTop}:format=auto[basev]`,
+    `[basev][slides]overlay=${slotX}:${slotY}:format=auto[v]`,
+  ].join(";");
+
+  const finalCmd = `ffmpeg -y -stream_loop -1 -i "${backgroundVideoPath}" -loop 1 -i "${overlayImagePath}" -stream_loop -1 -i "${slideVideoPath}" -stream_loop -1 -i "${audioPath}" -filter_complex "${finalFilter}" -map "[v]" -map 3:a:0 -t ${seconds} -c:v libx264 -preset medium -crf 21 -c:a aac -b:a 128k -pix_fmt yuv420p -shortest "${outputPath}"`;
+
+  await runCommand(finalCmd, "compose-slide-on-background");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("composeSlideOnBackground failed");
   }
 
   return outputPath;
@@ -198,7 +330,19 @@ async function processVideo(jobId, onProgress = () => {}) {
     throw new Error("Job not found");
   }
 
-  const { imageUrl, audioUrl, backgroundUrl, seconds } = job.payload;
+  const {
+    mode,
+    imageUrl,
+    slideImageUrls = [],
+    slideSeconds,
+    slideLayout,
+    audioUrl,
+    backgroundUrl,
+    seconds,
+    fullAudio,
+  } = job.payload;
+
+  const requestedSlideMode = mode === "slide" && slideImageUrls.length > 1;
 
   const tempDir = path.join(TEMP_DIR, jobId);
   fs.mkdirSync(tempDir, { recursive: true });
@@ -212,6 +356,9 @@ async function processVideo(jobId, onProgress = () => {}) {
     const audioPath = path.join(tempDir, "audio.mp3");
     const downloadedBgPath = path.join(tempDir, "background.mp4");
     const finalPath = path.join(tempDir, "final.mp4");
+    const slideImagePaths = slideImageUrls.map((_, index) =>
+      path.join(tempDir, `slide-${index}.jpg`),
+    );
 
     onProgress({
       progress: 10,
@@ -220,12 +367,51 @@ async function processVideo(jobId, onProgress = () => {}) {
     });
     await downloadFile(imageUrl, imagePath);
 
+    let validSlideImagePaths = [];
+    let validSlideImageUrls = [];
+
+    if (requestedSlideMode) {
+      for (let index = 0; index < slideImageUrls.length; index += 1) {
+        onProgress({
+          progress: 12 + Math.round(((index + 1) / slideImageUrls.length) * 8),
+          step: "download-slides",
+          message: `Đang tải ảnh slide ${index + 1}/${slideImageUrls.length}...`,
+        });
+
+        const ok = await tryDownloadFile(
+          slideImageUrls[index],
+          slideImagePaths[index],
+        );
+
+        if (ok) {
+          validSlideImagePaths.push(slideImagePaths[index]);
+          validSlideImageUrls.push(slideImageUrls[index]);
+        }
+      }
+    }
+
+    const isSlideMode = requestedSlideMode && validSlideImagePaths.length > 1;
+    const fallbackToSingleImage =
+      requestedSlideMode && validSlideImagePaths.length <= 1;
+
     onProgress({
       progress: 22,
       step: "download",
       message: "Đang tải audio...",
     });
     await downloadFile(audioUrl, audioPath);
+
+    let effectiveSeconds = Number(seconds);
+
+    if (fullAudio) {
+      onProgress({
+        progress: 28,
+        step: "probe-audio",
+        message: "Đang lấy thời lượng audio...",
+      });
+
+      effectiveSeconds = await getMediaDuration(audioPath);
+    }
 
     let backgroundVideoPath = BG_VIDEO_FILE;
 
@@ -250,24 +436,46 @@ async function processVideo(jobId, onProgress = () => {}) {
     onProgress({
       progress: 65,
       step: "render",
-      message: "Đang render video...",
+      message: isSlideMode
+        ? "Đang render video slide..."
+        : fallbackToSingleImage
+          ? "Một số ảnh slide lỗi, đang fallback sang ảnh tĩnh..."
+          : "Đang render video...",
     });
-    await composeImageOnBackground({
-      backgroundVideoPath,
-      imagePath,
-      audioPath,
-      outputPath: finalPath,
-      seconds: Number(seconds),
-      canvasW,
-      canvasH,
-    });
+
+    if (isSlideMode) {
+      await composeSlideOnBackground({
+        backgroundVideoPath,
+        overlayImagePath: imagePath,
+        slideImagePaths: validSlideImagePaths,
+        audioPath,
+        outputPath: finalPath,
+        seconds: effectiveSeconds,
+        slideSeconds,
+        slideLayout,
+        canvasW,
+        canvasH,
+      });
+    } else {
+      await composeImageOnBackground({
+        backgroundVideoPath,
+        imagePath,
+        audioPath,
+        outputPath: finalPath,
+        seconds: effectiveSeconds,
+        canvasW,
+        canvasH,
+      });
+    }
 
     onProgress({
       progress: 88,
       step: "upload",
       message: "Đang upload video...",
     });
-    const shortName = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.mp4`;
+    const shortName = `${Date.now().toString(36)}${Math.random()
+      .toString(36)
+      .slice(2, 6)}.mp4`;
 
     const uploadResult = await uploadVideo(finalPath, shortName);
 
@@ -294,10 +502,19 @@ async function processVideo(jobId, onProgress = () => {}) {
       service: uploadResult.service,
       permanent: uploadResult.permanent || false,
       metadata: {
-        duration: Number(Number(seconds).toFixed(2)),
+        duration: Number(effectiveSeconds.toFixed(2)),
+        requestedDuration: Number(Number(seconds || 0).toFixed(2)),
+        fullAudio: Boolean(fullAudio),
         resolution: `${canvasW}x${canvasH}`,
         backgroundSource: backgroundUrl ? "remote_url" : "default_local",
-        layout: "background video + full overlay image + looped external audio",
+        layout: isSlideMode
+          ? "background video + overlay text image + fade slideshow + external audio"
+          : "background video + full overlay image + looped external audio",
+        slideCount: isSlideMode ? validSlideImagePaths.length : 0,
+        slideSeconds: isSlideMode ? Number(slideSeconds) : null,
+        fallbackToSingleImage,
+        requestedSlideCount: slideImageUrls.length,
+        validSlideCount: validSlideImagePaths.length,
       },
     };
   } catch (error) {
@@ -352,7 +569,26 @@ async function runJob(jobId) {
 
 // ─── POST / — tạo job mới ────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
-  const { imageUrl, audioUrl, backgroundUrl, seconds } = req.body || {};
+  const {
+    imageUrl,
+    audioUrl,
+    backgroundUrl,
+    seconds,
+    mode,
+    slideImageUrls,
+    slideSeconds,
+    slideLayout,
+    fullAudio,
+  } = req.body || {};
+
+  const normalizedSlideImageUrls = Array.isArray(slideImageUrls)
+    ? slideImageUrls
+        .filter((url) => typeof url === "string" && url.trim())
+        .map((url) => url.trim())
+    : [];
+
+  const isSlideMode = mode === "slide" || normalizedSlideImageUrls.length > 1;
+  const useFullAudio = Boolean(fullAudio);
 
   if (!imageUrl || typeof imageUrl !== "string") {
     return res.status(400).json({
@@ -368,6 +604,24 @@ router.post("/", async (req, res) => {
     });
   }
 
+  if (isSlideMode && normalizedSlideImageUrls.length < 2) {
+    return res.status(400).json({
+      success: false,
+      error: "slideImageUrls must contain at least 2 image URLs",
+    });
+  }
+
+  const normalizedSlideSeconds = Number(slideSeconds || 4);
+  if (
+    isSlideMode &&
+    (!Number.isFinite(normalizedSlideSeconds) || normalizedSlideSeconds <= 0)
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: "slideSeconds must be a positive number",
+    });
+  }
+
   if (backgroundUrl != null && typeof backgroundUrl !== "string") {
     return res.status(400).json({
       success: false,
@@ -376,28 +630,39 @@ router.post("/", async (req, res) => {
   }
 
   const duration = Number(seconds);
-  if (!Number.isFinite(duration) || duration <= 0) {
+  if (!useFullAudio && (!Number.isFinite(duration) || duration <= 0)) {
     return res.status(400).json({
       success: false,
-      error: "seconds must be a positive number",
+      error: "seconds must be a positive number when fullAudio is false",
     });
   }
 
   const job = createJob({
+    mode: isSlideMode ? "slide" : "single",
     imageUrl,
+    slideImageUrls: normalizedSlideImageUrls,
+    slideSeconds: isSlideMode ? normalizedSlideSeconds : null,
+    slideLayout: slideLayout || null,
     audioUrl,
     backgroundUrl,
-    seconds: duration,
+    seconds: useFullAudio ? null : duration,
+    fullAudio: useFullAudio,
   });
 
   console.log(`\n╔══════════════════════════════════════════════════════╗`);
   console.log(`║ 🎬 BG IMAGE AUDIO Job: ${job.id}`);
+  console.log(`║ 🧩 Mode: ${isSlideMode ? "SLIDE" : "SINGLE"}`);
   console.log(`║ 🖼️  Image: ${imageUrl.substring(0, 60)}`);
+  if (isSlideMode) {
+    console.log(`║ 🖼️  Slides: ${normalizedSlideImageUrls.length}`);
+    console.log(`║ ⏭️  Slide seconds: ${normalizedSlideSeconds}`);
+  }
   console.log(`║ 🎵 Audio: ${audioUrl.substring(0, 60)}`);
   console.log(
     `║ 🎞️  Background: ${(backgroundUrl || "DEFAULT_LOCAL_BG").substring(0, 60)}`,
   );
-  console.log(`║ ⏱️  Seconds: ${duration}`);
+  console.log(`║ ⏱️  Seconds: ${useFullAudio ? "AUTO_FROM_AUDIO" : duration}`);
+  console.log(`║ 🎧 Full audio: ${useFullAudio}`);
   console.log(`╚══════════════════════════════════════════════════════╝`);
 
   res.status(202).json({
