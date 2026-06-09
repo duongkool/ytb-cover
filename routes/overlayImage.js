@@ -3,12 +3,14 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { promisify } = require("util");
-const { exec } = require("child_process");
+const { exec, spawn } = require("child_process");
 const { EventEmitter } = require("events");
+const { pipeline } = require("stream");
 
 const { uploadVideo } = require("../utils/uploadMedianet");
 
 const execAsync = promisify(exec);
+const pipelineAsync = promisify(pipeline);
 const router = express.Router();
 
 // ─── Job store ────────────────────────────────────────────────────────────────
@@ -26,9 +28,16 @@ if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
+// ─── Tunables ─────────────────────────────────────────────────────────────────
+const OUTPUT_FPS = 25;
+const OUTPUT_CRF = 24;
+const OUTPUT_PRESET = "superfast";
+const TRANSITION_DURATION = 0.5;
+const COMMAND_LOG_TAIL_CHARS = 20000;
+
 // ─── Helpers: Job ─────────────────────────────────────────────────────────────
 function generateJobId() {
-  return `bg_image_audio_${Date.now()}_${Math.random()
+  return `bg_image_audio_opt_${Date.now()}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
 }
@@ -104,39 +113,77 @@ function cleanupExpiredJobs() {
 }
 setInterval(cleanupExpiredJobs, 60 * 60 * 1000).unref();
 
-// ─── Helpers: Command / Media ────────────────────────────────────────────────
+// ─── Helpers: Media / Command ────────────────────────────────────────────────
 async function runCommand(cmd, label) {
   console.log(`\n================ ${label} ================`);
   console.log(cmd);
   console.log("==========================================\n");
 
-  try {
-    const { stdout, stderr } = await execAsync(cmd, {
-      maxBuffer: 1024 * 1024 * 300,
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, {
       shell: true,
+      windowsHide: true,
     });
 
-    if (stdout?.trim()) console.log(`[${label}] stdout:\n${stdout}`);
-    if (stderr?.trim()) console.log(`[${label}] stderr:\n${stderr}`);
+    let stdout = "";
+    let stderr = "";
 
-    return { stdout, stderr };
-  } catch (err) {
-    console.error(`❌ [${label}] failed`);
-    console.error(`[${label}] message:`, err.message);
-    if (err.stdout) console.error(`[${label}] stdout:\n${err.stdout}`);
-    if (err.stderr) console.error(`[${label}] stderr:\n${err.stderr}`);
-    throw new Error(`[${label}] ${err.stderr || err.message}`);
-  }
+    const appendTail = (current, chunk) => {
+      const next = current + chunk.toString();
+      return next.length > COMMAND_LOG_TAIL_CHARS
+        ? next.slice(next.length - COMMAND_LOG_TAIL_CHARS)
+        : next;
+    };
+
+    child.stdout.on("data", (chunk) => {
+      stdout = appendTail(stdout, chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr = appendTail(stderr, chunk);
+    });
+
+    child.on("error", (err) => {
+      console.error(`[${label}] failed`);
+      console.error(`[${label}] message:`, err.message);
+      reject(new Error(`[${label}] ${err.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        if (stdout.trim()) console.log(`[${label}] stdout tail:\n${stdout}`);
+        if (stderr.trim()) console.log(`[${label}] stderr tail:\n${stderr}`);
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      console.error(`[${label}] failed with exit code ${code}`);
+      if (stdout.trim()) console.error(`[${label}] stdout tail:\n${stdout}`);
+      if (stderr.trim()) console.error(`[${label}] stderr tail:\n${stderr}`);
+      reject(new Error(`[${label}] ${stderr || `exit code ${code}`}`));
+    });
+  });
+}
+
+function q(p) {
+  return `"${p}"`;
 }
 
 async function downloadFile(url, destPath) {
   const res = await axios.get(url, {
-    responseType: "arraybuffer",
+    responseType: "stream",
     timeout: 30000,
+    family: 4,
+    maxRedirects: 5,
+    maxBodyLength: Infinity,
     validateStatus: (status) => status >= 200 && status < 300,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    },
   });
 
-  fs.writeFileSync(destPath, res.data);
+  await pipelineAsync(res.data, fs.createWriteStream(destPath));
   return destPath;
 }
 
@@ -153,7 +200,7 @@ async function tryDownloadFile(url, destPath) {
 
 async function getVideoDimensions(filePath) {
   const { stdout } = await execAsync(
-    `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${filePath}"`,
+    `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x ${q(filePath)}`,
     { maxBuffer: 20 * 1024 * 1024 },
   );
 
@@ -167,12 +214,11 @@ async function getVideoDimensions(filePath) {
 
 async function getMediaDuration(filePath) {
   const { stdout } = await execAsync(
-    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ${q(filePath)}`,
     { maxBuffer: 20 * 1024 * 1024 },
   );
 
   const duration = Number(String(stdout).trim());
-
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error(`Cannot get media duration: ${filePath}`);
   }
@@ -184,6 +230,131 @@ function makeEven(value) {
   return Math.max(2, Math.round(Number(value) / 2) * 2);
 }
 
+function buildRoundedMaskExpression(radius) {
+  return `if(gt(abs(W/2-X),W/2-${radius})*gt(abs(H/2-Y),H/2-${radius}),if(lte(hypot(${radius}-(W/2-abs(W/2-X)),${radius}-(H/2-abs(H/2-Y))),${radius}),255,0),255)`;
+}
+
+function buildRoundedAlpha(radius) {
+  return `geq=lum='p(X,Y)':a='${buildRoundedMaskExpression(radius)}'`;
+}
+
+function buildRoundedLumaMask(radius) {
+  return `geq=lum='${buildRoundedMaskExpression(radius)}'`;
+}
+
+async function renderRoundedImage({
+  inputPath,
+  outputPath,
+  width,
+  radius,
+}) {
+  const filter = [
+    `scale=${makeEven(width)}:-2:flags=bicubic`,
+    `format=yuva420p`,
+    buildRoundedAlpha(radius),
+    `format=rgba`,
+  ].join(",");
+
+  const cmd = [
+    `ffmpeg -y`,
+    `-i ${q(inputPath)}`,
+    `-vf "${filter}"`,
+    `-frames:v 1 ${q(outputPath)}`,
+  ].join(" ");
+
+  await runCommand(cmd, "render-rounded-image");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to render rounded image");
+  }
+
+  return outputPath;
+}
+
+async function renderRoundedMask({
+  outputPath,
+  width,
+  height,
+  radius,
+}) {
+  const filter = [`format=gray`, buildRoundedLumaMask(radius)].join(",");
+  const cmd = [
+    `ffmpeg -y`,
+    `-f lavfi -i color=white:s=${makeEven(width)}x${makeEven(height)}:d=0.04`,
+    `-vf "${filter}"`,
+    `-frames:v 1 ${q(outputPath)}`,
+  ].join(" ");
+
+  await runCommand(cmd, "render-rounded-mask");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to render rounded mask");
+  }
+
+  return outputPath;
+}
+
+function getEffectiveTransitionDuration(slideSeconds) {
+  const duration = Math.max(0.1, Number(slideSeconds) || 0.1);
+  return Math.min(
+    TRANSITION_DURATION,
+    Math.max(0.01, duration / 3),
+    Math.max(0.01, duration - 0.01),
+  );
+}
+
+function getSlideStepSeconds(slideSeconds, transitionDuration) {
+  return Math.max(0.05, Number(slideSeconds) - Number(transitionDuration));
+}
+
+function estimateTimelineSlideCount(seconds, slideSeconds, transitionDuration) {
+  const stepSeconds = getSlideStepSeconds(slideSeconds, transitionDuration);
+  return Math.max(2, Math.ceil(Number(seconds) / stepSeconds) + 2);
+}
+
+function buildLoopableCycleSlides(slideImagePaths) {
+  return [...slideImagePaths, slideImagePaths[0]];
+}
+
+function buildXfadeScriptFile(
+  filePath,
+  totalSlides,
+  slotW,
+  slotH,
+  fps,
+  transitionDuration,
+  slideSeconds,
+  outputSeconds,
+) {
+  const parts = [];
+
+  for (let i = 0; i < totalSlides; i += 1) {
+    parts.push(
+      `[${i}:v]scale=${slotW}:${slotH}:force_original_aspect_ratio=decrease:flags=bicubic,` +
+        `pad=${slotW}:${slotH}:(ow-iw)/2:(oh-ih)/2:color=black,` +
+        `trim=duration=${Number(slideSeconds).toFixed(3)},` +
+        `setpts=PTS-STARTPTS,fps=${fps},settb=AVTB,setsar=1,format=yuv420p[v${i}]`,
+    );
+  }
+
+  let prev = "[v0]";
+  for (let i = 1; i < totalSlides; i += 1) {
+    const offset = (slideSeconds * i - transitionDuration * i).toFixed(3);
+    const label = i === totalSlides - 1 ? "[vout_pre]" : `[vx${i}]`;
+    parts.push(
+      `${prev}[v${i}]xfade=transition=fade:duration=${transitionDuration}:offset=${offset},fps=${fps},settb=AVTB${label}`,
+    );
+    prev = label;
+  }
+
+  parts.push(
+    `[vout_pre]trim=duration=${outputSeconds.toFixed(3)},setpts=PTS-STARTPTS[vout]`,
+  );
+
+  fs.writeFileSync(filePath, parts.join(";\n"), "utf8");
+}
+
+// ─── Render: single image mode ───────────────────────────────────────────────
 async function composeImageOnBackground({
   backgroundVideoPath,
   imagePath,
@@ -192,19 +363,39 @@ async function composeImageOnBackground({
   seconds,
   canvasW,
   canvasH,
+  tempDir,
 }) {
   const marginX = 10;
   const marginTop = 10;
   const targetW = canvasW - marginX * 2;
   const cornerRadius = 24;
+  const roundedImagePath = path.join(tempDir, "rounded-image.png");
+
+  await renderRoundedImage({
+    inputPath: imagePath,
+    outputPath: roundedImagePath,
+    width: targetW,
+    radius: cornerRadius,
+  });
 
   const filter = [
-    `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}[bg]`,
-    `[1:v]scale=${targetW}:-2,format=yuva420p,geq=lum='p(X,Y)':a='if(gt(abs(W/2-X),W/2-${cornerRadius})*gt(abs(H/2-Y),H/2-${cornerRadius}),if(lte(hypot(${cornerRadius}-(W/2-abs(W/2-X)),${cornerRadius}-(H/2-abs(H/2-Y))),${cornerRadius}),255,0),255)'[fg]`,
-    `[bg][fg]overlay=${marginX}:${marginTop}:format=auto[v]`,
+    `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
+    `[1:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=rgba[fg]`,
+    `[bg][fg]overlay=${marginX}:${marginTop}:format=auto,fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
-  const cmd = `ffmpeg -y -stream_loop -1 -i "${backgroundVideoPath}" -loop 1 -i "${imagePath}" -stream_loop -1 -i "${audioPath}" -filter_complex "${filter}" -map "[v]" -map 2:a:0 -t ${seconds} -c:v libx264 -preset medium -crf 21 -c:a aac -b:a 128k -pix_fmt yuv420p -shortest "${outputPath}"`;
+  const cmd = [
+    `ffmpeg -y`,
+    `-stream_loop -1 -i ${q(backgroundVideoPath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedImagePath)}`,
+    `-stream_loop -1 -i ${q(audioPath)}`,
+    `-filter_complex "${filter}"`,
+    `-map "[v]" -map 2:a:0`,
+    `-t ${Number(seconds).toFixed(3)}`,
+    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -pix_fmt yuv420p -r ${OUTPUT_FPS}`,
+    `-c:a aac -b:a 128k`,
+    `-movflags +faststart ${q(outputPath)}`,
+  ].join(" ");
 
   await runCommand(cmd, "compose-image-on-background");
 
@@ -215,7 +406,76 @@ async function composeImageOnBackground({
   return outputPath;
 }
 
-async function composeSlideOnBackground({
+// ─── Step 1: build slideshow video safely ────────────────────────────────────
+async function buildSlideVideo({
+  slideImagePaths,
+  slideSeconds,
+  seconds,
+  slotW,
+  slotH,
+  tempDir,
+  outputPath,
+}) {
+  const normalizedSlideSeconds = Number(slideSeconds) || 4;
+  const transitionDuration =
+    getEffectiveTransitionDuration(normalizedSlideSeconds);
+  const cycleSlides = buildLoopableCycleSlides(slideImagePaths);
+  const stepSeconds = getSlideStepSeconds(
+    normalizedSlideSeconds,
+    transitionDuration,
+  );
+  const cycleDuration =
+    slideImagePaths.length * stepSeconds + transitionDuration;
+
+  const scriptPath = path.join(tempDir, "slides_xfade.txt");
+  buildXfadeScriptFile(
+    scriptPath,
+    cycleSlides.length,
+    slotW,
+    slotH,
+    OUTPUT_FPS,
+    transitionDuration,
+    normalizedSlideSeconds,
+    cycleDuration,
+  );
+
+  const inputArgs = cycleSlides
+    .map(
+      (p) =>
+        `-framerate ${OUTPUT_FPS} -loop 1 -t ${normalizedSlideSeconds.toFixed(
+          3,
+        )} -i ${q(p)}`,
+    )
+    .join(" ");
+  const cmd = [
+    `ffmpeg -y ${inputArgs}`,
+    `-filter_complex_script ${q(scriptPath)}`,
+    `-map "[vout]"`,
+    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -pix_fmt yuv420p -r ${OUTPUT_FPS}`,
+    `-an -movflags +faststart ${q(outputPath)}`,
+  ].join(" ");
+
+  await runCommand(cmd, "build-loopable-slide-video");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to build slideshow video");
+  }
+
+  return {
+    outputPath,
+    expandedSlideCount: estimateTimelineSlideCount(
+      seconds,
+      normalizedSlideSeconds,
+      transitionDuration,
+    ),
+    renderedSlideCount: cycleSlides.length,
+    slideCycleSeconds: Number(cycleDuration.toFixed(3)),
+    transitionDuration: Number(transitionDuration.toFixed(3)),
+  };
+}
+
+// ─── Step 2: overlay slideshow on background ─────────────────────────────────
+async function composeSlideOnBackgroundOptimized({
   backgroundVideoPath,
   overlayImagePath,
   slideImagePaths,
@@ -226,6 +486,7 @@ async function composeSlideOnBackground({
   slideLayout,
   canvasW,
   canvasH,
+  tempDir,
 }) {
   const marginX = 10;
   const marginTop = 10;
@@ -244,83 +505,77 @@ async function composeSlideOnBackground({
   const slotW = makeEven(imageW * scaleRatio);
   const slotH = makeEven(imageH * scaleRatio);
 
-  const fps = 30;
-  const transitionDuration = 0.5;
-  const normalizedSlideSeconds = Math.max(
-    transitionDuration + 0.2,
-    Number(slideSeconds) || 4,
-  );
+  const slideVideoPath = path.join(tempDir, "slides.mp4");
+  const roundedBasePath = path.join(tempDir, "rounded-base.png");
+  const slideMaskPath = path.join(tempDir, "slide-mask.png");
+  const [slideBuild] = await Promise.all([
+    buildSlideVideo({
+      slideImagePaths,
+      slideSeconds: Number(slideSeconds) || 4,
+      seconds: Number(seconds),
+      slotW,
+      slotH,
+      tempDir,
+      outputPath: slideVideoPath,
+    }),
+    renderRoundedImage({
+      inputPath: overlayImagePath,
+      outputPath: roundedBasePath,
+      width: targetW,
+      radius: cornerRadius,
+    }),
+    renderRoundedMask({
+      outputPath: slideMaskPath,
+      width: slotW,
+      height: slotH,
+      radius: cornerRadius,
+    }),
+  ]);
+  const {
+    expandedSlideCount,
+    renderedSlideCount,
+    slideCycleSeconds,
+    transitionDuration,
+  } = slideBuild;
 
-  const totalSlides = slideImagePaths.length;
-  const slideVideoPath = path.join(path.dirname(outputPath), "slides.mp4");
-
-  const roundedAlpha = (radius) =>
-    `geq=lum='p(X,Y)':a='if(gt(abs(W/2-X),W/2-${radius})*gt(abs(H/2-Y),H/2-${radius}),if(lte(hypot(${radius}-(W/2-abs(W/2-X)),${radius}-(H/2-abs(H/2-Y))),${radius}),255,0),255)'`;
-
-  const slideInputs = slideImagePaths
-    .map(
-      (slidePath) => `-loop 1 -t ${normalizedSlideSeconds} -i "${slidePath}"`,
-    )
-    .join(" ");
-
-  const slideFilters = [];
-
-  for (let i = 0; i < totalSlides; i += 1) {
-    const outLabel = i === 0 ? "v0src" : `v${i}`;
-    slideFilters.push(
-      `[${i}:v]trim=duration=${normalizedSlideSeconds},setpts=PTS-STARTPTS,scale=${slotW}:${slotH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${slotW}:${slotH}:(ow-iw)/2:(oh-ih)/2:color=black,fps=${fps},setsar=1,format=yuv420p[${outLabel}]`,
-    );
-  }
-
-  slideFilters.push(`[v0src]split=2[v0][v0loop]`);
-
-  let lastLabel = "v0";
-  let currentOffset = normalizedSlideSeconds - transitionDuration;
-
-  for (let i = 1; i < totalSlides; i += 1) {
-    const outLabel = `xf${i}`;
-    slideFilters.push(
-      `[${lastLabel}][v${i}]xfade=transition=fade:duration=${transitionDuration}:offset=${currentOffset}[${outLabel}]`,
-    );
-    lastLabel = outLabel;
-    currentOffset += normalizedSlideSeconds - transitionDuration;
-  }
-
-  slideFilters.push(
-    `[${lastLabel}][v0loop]xfade=transition=fade:duration=${transitionDuration}:offset=${currentOffset}[slidesloop]`,
-  );
-
-  slideFilters.push(
-    `[slidesloop]trim=duration=${seconds},setpts=PTS-STARTPTS[slidesout]`,
-  );
-
-  const slideFilter = slideFilters.join(";");
-
-  const slideCmd = `ffmpeg -y ${slideInputs} -filter_complex "${slideFilter}" -map "[slidesout]" -r ${fps} -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "${slideVideoPath}"`;
-
-  await runCommand(slideCmd, "build-slide-video");
-
-  if (!fs.existsSync(slideVideoPath)) {
-    throw new Error("Failed to build slideshow video");
-  }
-
-  const finalFilter = [
-    `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}[bg]`,
-    `[1:v]scale=${targetW}:-2,format=yuva420p,${roundedAlpha(cornerRadius)}[base]`,
-    `[2:v]scale=${slotW}:${slotH},setsar=1,format=yuva420p,${roundedAlpha(cornerRadius)}[slides]`,
+  const filter = [
+    `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
+    `[1:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=rgba[base]`,
+    `[2:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=rgb24[slidesrgb]`,
+    `[3:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=gray,setsar=1[slidemask]`,
+    `[slidesrgb][slidemask]alphamerge,format=yuva420p[slides]`,
     `[bg][base]overlay=${marginX}:${marginTop}:format=auto[basev]`,
-    `[basev][slides]overlay=${slotX}:${slotY}:format=auto[v]`,
+    `[basev][slides]overlay=${slotX}:${slotY}:format=auto,fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
-  const finalCmd = `ffmpeg -y -stream_loop -1 -i "${backgroundVideoPath}" -loop 1 -i "${overlayImagePath}" -stream_loop -1 -i "${slideVideoPath}" -stream_loop -1 -i "${audioPath}" -filter_complex "${finalFilter}" -map "[v]" -map 3:a:0 -t ${seconds} -c:v libx264 -preset medium -crf 21 -c:a aac -b:a 128k -pix_fmt yuv420p -shortest "${outputPath}"`;
+  const cmd = [
+    `ffmpeg -y`,
+    `-stream_loop -1 -i ${q(backgroundVideoPath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedBasePath)}`,
+    `-stream_loop -1 -i ${q(slideVideoPath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(slideMaskPath)}`,
+    `-stream_loop -1 -i ${q(audioPath)}`,
+    `-filter_complex "${filter}"`,
+    `-map "[v]" -map 4:a:0`,
+    `-t ${Number(seconds).toFixed(3)}`,
+    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -pix_fmt yuv420p -r ${OUTPUT_FPS}`,
+    `-c:a aac -b:a 128k`,
+    `-movflags +faststart ${q(outputPath)}`,
+  ].join(" ");
 
-  await runCommand(finalCmd, "compose-slide-on-background");
+  await runCommand(cmd, "compose-slide-on-background-optimized");
 
   if (!fs.existsSync(outputPath)) {
-    throw new Error("composeSlideOnBackground failed");
+    throw new Error("composeSlideOnBackgroundOptimized failed");
   }
 
-  return outputPath;
+  return {
+    outputPath,
+    expandedSlideCount,
+    renderedSlideCount,
+    slideCycleSeconds,
+    transitionDuration,
+  };
 }
 
 // ─── Core process ────────────────────────────────────────────────────────────
@@ -343,7 +598,6 @@ async function processVideo(jobId, onProgress = () => {}) {
   } = job.payload;
 
   const requestedSlideMode = mode === "slide" && slideImageUrls.length > 1;
-
   const tempDir = path.join(TEMP_DIR, jobId);
   fs.mkdirSync(tempDir, { recursive: true });
 
@@ -363,29 +617,38 @@ async function processVideo(jobId, onProgress = () => {}) {
     onProgress({
       progress: 10,
       step: "download",
-      message: "Đang tải ảnh đầu vào...",
+      message: "Đang tải file đầu vào...",
     });
-    await downloadFile(imageUrl, imagePath);
+
+    const mainDownloads = [
+      downloadFile(imageUrl, imagePath),
+      downloadFile(audioUrl, audioPath),
+    ];
+
+    if (backgroundUrl) {
+      mainDownloads.push(downloadFile(backgroundUrl, downloadedBgPath));
+    }
+
+    await Promise.all(mainDownloads);
 
     let validSlideImagePaths = [];
-    let validSlideImageUrls = [];
 
     if (requestedSlideMode) {
-      for (let index = 0; index < slideImageUrls.length; index += 1) {
-        onProgress({
-          progress: 12 + Math.round(((index + 1) / slideImageUrls.length) * 8),
-          step: "download-slides",
-          message: `Đang tải ảnh slide ${index + 1}/${slideImageUrls.length}...`,
-        });
+      onProgress({
+        progress: 20,
+        step: "download-slides",
+        message: `Đang tải ${slideImageUrls.length} ảnh slide...`,
+      });
 
-        const ok = await tryDownloadFile(
-          slideImageUrls[index],
-          slideImagePaths[index],
-        );
+      const slideResults = await Promise.all(
+        slideImageUrls.map((url, index) =>
+          tryDownloadFile(url, slideImagePaths[index]),
+        ),
+      );
 
-        if (ok) {
-          validSlideImagePaths.push(slideImagePaths[index]);
-          validSlideImageUrls.push(slideImageUrls[index]);
+      for (let i = 0; i < slideResults.length; i += 1) {
+        if (slideResults[i]) {
+          validSlideImagePaths.push(slideImagePaths[i]);
         }
       }
     }
@@ -394,57 +657,47 @@ async function processVideo(jobId, onProgress = () => {}) {
     const fallbackToSingleImage =
       requestedSlideMode && validSlideImagePaths.length <= 1;
 
-    onProgress({
-      progress: 22,
-      step: "download",
-      message: "Đang tải audio...",
-    });
-    await downloadFile(audioUrl, audioPath);
-
     let effectiveSeconds = Number(seconds);
 
     if (fullAudio) {
       onProgress({
-        progress: 28,
+        progress: 30,
         step: "probe-audio",
         message: "Đang lấy thời lượng audio...",
       });
-
       effectiveSeconds = await getMediaDuration(audioPath);
     }
 
-    let backgroundVideoPath = BG_VIDEO_FILE;
-
-    if (backgroundUrl) {
-      onProgress({
-        progress: 34,
-        step: "download",
-        message: "Đang tải background video...",
-      });
-      await downloadFile(backgroundUrl, downloadedBgPath);
-      backgroundVideoPath = downloadedBgPath;
-    }
+    const backgroundVideoPath = backgroundUrl
+      ? downloadedBgPath
+      : BG_VIDEO_FILE;
 
     onProgress({
-      progress: 45,
+      progress: 38,
       step: "probe",
       message: "Đang phân tích video nền...",
     });
+
     const { width: canvasW, height: canvasH } =
       await getVideoDimensions(backgroundVideoPath);
 
+    let expandedSlideCount = 0;
+    let renderedSlideCount = 0;
+    let slideCycleSeconds = null;
+    let transitionDuration = null;
+
     onProgress({
-      progress: 65,
+      progress: 55,
       step: "render",
       message: isSlideMode
-        ? "Đang render video slide..."
+        ? "Đang render slideshow và ghép nền..."
         : fallbackToSingleImage
-          ? "Một số ảnh slide lỗi, đang fallback sang ảnh tĩnh..."
+          ? "Một số ảnh slide lỗi, fallback sang ảnh tĩnh..."
           : "Đang render video...",
     });
 
     if (isSlideMode) {
-      await composeSlideOnBackground({
+      const slideResult = await composeSlideOnBackgroundOptimized({
         backgroundVideoPath,
         overlayImagePath: imagePath,
         slideImagePaths: validSlideImagePaths,
@@ -455,7 +708,12 @@ async function processVideo(jobId, onProgress = () => {}) {
         slideLayout,
         canvasW,
         canvasH,
+        tempDir,
       });
+      expandedSlideCount = slideResult.expandedSlideCount || 0;
+      renderedSlideCount = slideResult.renderedSlideCount || 0;
+      slideCycleSeconds = slideResult.slideCycleSeconds || null;
+      transitionDuration = slideResult.transitionDuration || null;
     } else {
       await composeImageOnBackground({
         backgroundVideoPath,
@@ -465,6 +723,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         seconds: effectiveSeconds,
         canvasW,
         canvasH,
+        tempDir,
       });
     }
 
@@ -473,6 +732,7 @@ async function processVideo(jobId, onProgress = () => {}) {
       step: "upload",
       message: "Đang upload video...",
     });
+
     const shortName = `${Date.now().toString(36)}${Math.random()
       .toString(36)
       .slice(2, 6)}.mp4`;
@@ -508,13 +768,21 @@ async function processVideo(jobId, onProgress = () => {}) {
         resolution: `${canvasW}x${canvasH}`,
         backgroundSource: backgroundUrl ? "remote_url" : "default_local",
         layout: isSlideMode
-          ? "background video + overlay text image + fade slideshow + external audio"
-          : "background video + full overlay image + looped external audio",
+          ? "background video + overlay image + loopable slideshow video + external audio"
+          : "background video + full overlay image + external audio",
         slideCount: isSlideMode ? validSlideImagePaths.length : 0,
         slideSeconds: isSlideMode ? Number(slideSeconds) : null,
         fallbackToSingleImage,
         requestedSlideCount: slideImageUrls.length,
         validSlideCount: validSlideImagePaths.length,
+        expandedSlideCount,
+        renderedSlideCount,
+        slideCycleSeconds,
+        transitionDuration,
+        optimized: true,
+        fps: OUTPUT_FPS,
+        crf: OUTPUT_CRF,
+        preset: OUTPUT_PRESET,
       },
     };
   } catch (error) {
@@ -650,7 +918,7 @@ router.post("/", async (req, res) => {
   });
 
   console.log(`\n╔══════════════════════════════════════════════════════╗`);
-  console.log(`║ 🎬 BG IMAGE AUDIO Job: ${job.id}`);
+  console.log(`║ 🎬 BG IMAGE AUDIO OPT Job: ${job.id}`);
   console.log(`║ 🧩 Mode: ${isSlideMode ? "SLIDE" : "SINGLE"}`);
   console.log(`║ 🖼️  Image: ${imageUrl.substring(0, 60)}`);
   if (isSlideMode) {
@@ -663,6 +931,7 @@ router.post("/", async (req, res) => {
   );
   console.log(`║ ⏱️  Seconds: ${useFullAudio ? "AUTO_FROM_AUDIO" : duration}`);
   console.log(`║ 🎧 Full audio: ${useFullAudio}`);
+  console.log(`║ ⚙️  FPS/CRF: ${OUTPUT_FPS}/${OUTPUT_CRF}`);
   console.log(`╚══════════════════════════════════════════════════════╝`);
 
   res.status(202).json({
