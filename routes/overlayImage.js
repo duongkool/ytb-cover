@@ -7,7 +7,7 @@ const { exec, spawn } = require("child_process");
 const { EventEmitter } = require("events");
 const { pipeline } = require("stream");
 
-const { uploadVideo } = require("../utils/uploadMedianet");
+const { uploadVideo } = require("../utils/uploadVps");
 
 const execAsync = promisify(exec);
 const pipelineAsync = promisify(pipeline);
@@ -242,12 +242,7 @@ function buildRoundedLumaMask(radius) {
   return `geq=lum='${buildRoundedMaskExpression(radius)}'`;
 }
 
-async function renderRoundedImage({
-  inputPath,
-  outputPath,
-  width,
-  radius,
-}) {
+async function renderRoundedImage({ inputPath, outputPath, width, radius }) {
   const filter = [
     `scale=${makeEven(width)}:-2:flags=bicubic`,
     `format=yuva420p`,
@@ -271,12 +266,7 @@ async function renderRoundedImage({
   return outputPath;
 }
 
-async function renderRoundedMask({
-  outputPath,
-  width,
-  height,
-  radius,
-}) {
+async function renderRoundedMask({ outputPath, width, height, radius }) {
   const filter = [`format=gray`, buildRoundedLumaMask(radius)].join(",");
   const cmd = [
     `ffmpeg -y`,
@@ -417,8 +407,9 @@ async function buildSlideVideo({
   outputPath,
 }) {
   const normalizedSlideSeconds = Number(slideSeconds) || 4;
-  const transitionDuration =
-    getEffectiveTransitionDuration(normalizedSlideSeconds);
+  const transitionDuration = getEffectiveTransitionDuration(
+    normalizedSlideSeconds,
+  );
   const cycleSlides = buildLoopableCycleSlides(slideImagePaths);
   const stepSeconds = getSlideStepSeconds(
     normalizedSlideSeconds,
