@@ -59,6 +59,7 @@ app.use("/api/cover", require("./routes/cover"));
 app.use("/api/podcastHook", require("./routes/podcastHook"));
 app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 app.use("/api/overlay-image", require("./routes/overlayImage"));
+app.use("/api/upload-local", require("./routes/uploadLocal"));
 const hookV2 = require("./routes/batchHookV5");
 app.use("/api/cover-v2", hookV2);
 
@@ -88,7 +89,27 @@ app.use("/api", require("./routes/bulk")({ workers, jobs }));
 
 app.use((err, req, res, next) => {
   console.error("💥 Express error:", err.message);
-  res.status(500).json({
+
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      success: false,
+      error: "Upload error",
+      details: err.message,
+    });
+  }
+
+  if (
+    err.message === "Only video files are allowed" ||
+    err.message === "Missing file"
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: "Bad Request",
+      details: err.message,
+    });
+  }
+
+  return res.status(500).json({
     success: false,
     error: "Internal Server Error",
     details: err.message,
