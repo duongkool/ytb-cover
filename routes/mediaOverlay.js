@@ -21,7 +21,16 @@ const DEFAULT_MIN_SECONDS = 14;
 const DEFAULT_MAX_SECONDS = 16;
 const COMMAND_LOG_TAIL_CHARS = 20000;
 const TEMP_DIR = path.join(__dirname, "..", "temp");
-const BG_VIDEO_FILE = path.join(__dirname, "..", "video1.mp4");
+const BG_VIDEO_FILES = Array.from({ length: 5 }, (_, i) =>
+  path.join(__dirname, "..", `video${i + 1}.mp4`),
+);
+const FALLBACK_AUDIO_FILES = Array.from({ length: 5 }, (_, i) =>
+  path.join(__dirname, "..", `audio${i + 1}.mp3`),
+);
+const FONT_PATH = path
+  .join(__dirname, "..", "fonts", "BebasNeue-Regular.ttf")
+  .replace(/\\/g, "/")
+  .replace(/^([A-Z]):/, (_, d) => `${d}\\:`);
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -131,6 +140,49 @@ function getFontPathEscaped() {
   return escapeFilterPath(
     path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
   );
+}
+
+function pickRandomExistingFile(filePaths, missingMessage) {
+  const candidates = filePaths.filter((filePath) => fs.existsSync(filePath));
+
+  if (candidates.length === 0) {
+    throw new Error(missingMessage);
+  }
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function getLanguageFooterText(language) {
+  const normalized = normalizeText(language).toLowerCase();
+
+  const footerByLanguage = {
+    en: "Full story in comment",
+    english: "Full story in comment",
+    pt: "Hist\u00f3ria completa no coment\u00e1rio",
+    portugal: "Hist\u00f3ria completa no coment\u00e1rio",
+    portuguese: "Hist\u00f3ria completa no coment\u00e1rio",
+    es: "Historia completa en el comentario",
+    spain: "Historia completa en el comentario",
+    spanish: "Historia completa en el comentario",
+  };
+
+  const text = footerByLanguage[normalized];
+  return text ? text.toUpperCase() : "";
+}
+
+function buildLanguageFooterFilter(language, tempDir, prefix = "footer") {
+  const footerText = getLanguageFooterText(language);
+  if (!footerText) return "";
+
+  const txtPath = path.join(tempDir, `${prefix}.txt`);
+  fs.writeFileSync(txtPath, normalizeForTextfile(footerText), "utf8");
+
+  const txtPathEscaped = escapeFilterPath(txtPath);
+  const fontPathEscaped = FONT_PATH.replace(/'/g, "\\'");
+  const fontSize = 28;
+  const sideMargin = 18;
+
+  return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=yellow:fontsize=${fontSize}:x=max(${sideMargin}\\,(w-text_w)/2):y=h-text_h-40:bordercolor=black:borderw=1.4`;
 }
 
 function buildStandardTextOverlayFilter(content, tempDir, prefix = "line") {
@@ -334,6 +386,7 @@ async function renderImageWithTextAndAudio({
   audioPath,
   outputPath,
   content,
+  language,
   seconds,
   tempDir,
 }) {
@@ -350,12 +403,17 @@ async function renderImageWithTextAndAudio({
     tempDir,
     "fast_line",
   );
+  const languageFooterFilter = buildLanguageFooterFilter(
+    language,
+    tempDir,
+    "fast_image_footer",
+  );
 
   const filter = [
     `[0:v]scale=${scaledW}:${scaledH}:flags=fast_bilinear,` +
       `crop=${DEFAULT_W}:${DEFAULT_H}:${xExpr}:0,` +
       `fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=yuv420p,` +
-      `${textFilter}[v]`,
+      `${textFilter}${languageFooterFilter ? `,${languageFooterFilter}` : ""}[v]`,
   ].join(";");
 
   const filterFile = path.join(tempDir, "fast_image_filter.txt");
@@ -387,6 +445,7 @@ async function renderVideoWithTextAndAudio({
   audioPath,
   outputPath,
   content,
+  language,
   seconds,
   tempDir,
 }) {
@@ -395,11 +454,17 @@ async function renderVideoWithTextAndAudio({
     tempDir,
     "fast_video_line",
   );
+  const languageFooterFilter = buildLanguageFooterFilter(
+    language,
+    tempDir,
+    "fast_video_footer",
+  );
 
   const filter = [
     `[0:v]scale=${DEFAULT_W}:${DEFAULT_H}:force_original_aspect_ratio=increase:flags=fast_bilinear,` +
       `crop=${DEFAULT_W}:${DEFAULT_H},fps=${OUTPUT_FPS},` +
-      `setpts=N/(${OUTPUT_FPS}*TB),format=yuv420p,${textFilter}[v]`,
+      `setpts=N/(${OUTPUT_FPS}*TB),format=yuv420p,` +
+      `${textFilter}${languageFooterFilter ? `,${languageFooterFilter}` : ""}[v]`,
   ].join(";");
 
   const filterFile = path.join(tempDir, "fast_video_filter.txt");
@@ -496,6 +561,7 @@ async function createImageBackgroundLayout({
   audioPath,
   outputPath,
   content,
+  language,
   seconds,
   tempDir,
   canvasW,
@@ -566,6 +632,14 @@ async function createImageBackgroundLayout({
 
     return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.7`;
   });
+  const languageFooterFilter = buildLanguageFooterFilter(
+    language,
+    tempDir,
+    "bg_footer",
+  );
+  const overlayFilters = languageFooterFilter
+    ? [...drawLines, languageFooterFilter]
+    : drawLines;
 
   const filter = [
     `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
@@ -573,7 +647,7 @@ async function createImageBackgroundLayout({
     `[imgscaled]crop=${canvasW}:'min(ih,${IMAGE_MAX_H})':0:'max((ih-${IMAGE_MAX_H})/2,0)'[imgcropped]`,
     `[bg][imgcropped]overlay=0:${IMAGE_TOP_Y}[base1]`,
     `[base1]drawbox=x=${textBoxX}:y=${textBoxY}:w=${textBoxW}:h=${textBoxH}:color=black@0.72:t=fill[base2]`,
-    `[base2]${drawLines.join(",")},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
+    `[base2]${overlayFilters.join(",")},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
   const filterFile = path.join(tempDir, "bg_layout_filter.txt");
@@ -618,6 +692,7 @@ router.post("/", async (req, res) => {
     second,
     type = "image",
     option,
+    language,
     audioPath: customAudioPath,
   } = req.body || {};
 
@@ -670,22 +745,15 @@ router.post("/", async (req, res) => {
     await downloadFile(url, sourcePath);
 
     let audioToUse = customAudioPath;
+    let selectedBackgroundVideo = null;
     if (!audioToUse) {
-      const audioCandidates = ["audio1.mp3", "audio2.mp3", "audio3.mp3"]
-        .map((file) => path.join(__dirname, "..", file))
-        .filter((filePath) => fs.existsSync(filePath));
-
-      if (audioCandidates.length === 0) {
-        throw new Error(
-          "No fallback audio found. Expected one of: audio1.mp3, audio2.mp3, audio3.mp3",
-        );
-      }
-
-      audioToUse =
-        audioCandidates[Math.floor(Math.random() * audioCandidates.length)];
+      audioToUse = pickRandomExistingFile(
+        FALLBACK_AUDIO_FILES,
+        "No fallback audio found. Expected one of: audio1.mp3, audio2.mp3, audio3.mp3, audio4.mp3, audio5.mp3",
+      );
 
       console.log(
-        `ðŸŽµ Random fallback audio selected: ${path.basename(audioToUse)}`,
+        `[mediaOverlay] Random fallback audio selected: ${path.basename(audioToUse)}`,
       );
     }
 
@@ -695,27 +763,35 @@ router.post("/", async (req, res) => {
         audioPath: audioToUse,
         outputPath: finalPath,
         content,
+        language,
         seconds,
         tempDir,
       });
       outputW = DEFAULT_W;
       outputH = DEFAULT_H;
     } else if (option === "background") {
-      if (!fs.existsSync(BG_VIDEO_FILE)) {
-        throw new Error("Missing background video: video1.mp4");
-      }
+      selectedBackgroundVideo = pickRandomExistingFile(
+        BG_VIDEO_FILES,
+        "No background video found. Expected one of: video1.mp4, video2.mp4, video3.mp4, video4.mp4, video5.mp4",
+      );
 
-      const { width: canvasW, height: canvasH } =
-        await getVideoDimensions(BG_VIDEO_FILE);
+      console.log(
+        `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
+      );
+
+      const { width: canvasW, height: canvasH } = await getVideoDimensions(
+        selectedBackgroundVideo,
+      );
       outputW = canvasW;
       outputH = canvasH;
 
       await createImageBackgroundLayout({
         imagePath: sourcePath,
-        backgroundVideoPath: BG_VIDEO_FILE,
+        backgroundVideoPath: selectedBackgroundVideo,
         audioPath: audioToUse,
         outputPath: finalPath,
         content,
+        language,
         seconds,
         tempDir,
         canvasW,
@@ -727,30 +803,12 @@ router.post("/", async (req, res) => {
         audioPath: audioToUse,
         outputPath: finalPath,
         content,
+        language,
         seconds,
         tempDir,
       });
       outputW = DEFAULT_W;
       outputH = DEFAULT_H;
-    }
-
-    if (false && !audioToUse) {
-      const audioCandidates = ["audio1.mp3", "audio2.mp3", "audio3.mp3"]
-        .map((file) => path.join(__dirname, "..", file))
-        .filter((filePath) => fs.existsSync(filePath));
-
-      if (audioCandidates.length === 0) {
-        throw new Error(
-          "No fallback audio found. Expected one of: audio1.mp3, audio2.mp3, audio3.mp3",
-        );
-      }
-
-      audioToUse =
-        audioCandidates[Math.floor(Math.random() * audioCandidates.length)];
-
-      console.log(
-        `🎵 Random fallback audio selected: ${path.basename(audioToUse)}`,
-      );
     }
 
     const uploadResult = await uploadVideo(
@@ -780,6 +838,12 @@ router.post("/", async (req, res) => {
         resolution: `${outputW}x${outputH}`,
         type,
         option: option || null,
+        language: language || null,
+        languageFooterText: getLanguageFooterText(language) || null,
+        audioFile: audioToUse ? path.basename(audioToUse) : null,
+        backgroundVideoFile: selectedBackgroundVideo
+          ? path.basename(selectedBackgroundVideo)
+          : null,
         maxCharsInBox: 500,
         renderedChars: finalRenderedText.length,
         renderedLines: wrapTextMobile(content, 44, 13).length,
