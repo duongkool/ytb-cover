@@ -12,6 +12,9 @@ const execAsync = promisify(exec);
 const pipelineAsync = promisify(pipeline);
 const router = express.Router();
 
+const TEXT_WHITE = "#ece6da";
+const TEXT_YELLOW = "#efca19";
+
 const DEFAULT_W = 720;
 const DEFAULT_H = 1280;
 const OUTPUT_FPS = 30;
@@ -28,7 +31,7 @@ const FALLBACK_AUDIO_FILES = Array.from({ length: 5 }, (_, i) =>
   path.join(__dirname, "..", `audio${i + 1}.mp3`),
 );
 const FONT_PATH = path
-  .join(__dirname, "..", "fonts", "BebasNeue-Regular.ttf")
+  .join(__dirname, "..", "fonts", "LilitaOne-Regular.ttf")
   .replace(/\\/g, "/")
   .replace(/^([A-Z]):/, (_, d) => `${d}\\:`);
 
@@ -75,7 +78,7 @@ function clampContent(text, maxChars = 500) {
 }
 
 function wrapTextMobile(text, maxCharsPerLine = 44, maxLines = 13) {
-  const clean = clampContent(text, 500);
+  const clean = normalizeText(text);
   if (!clean) return [""];
 
   const words = clean.split(" ");
@@ -138,7 +141,7 @@ function escapeFilterPath(filePath) {
 
 function getFontPathEscaped() {
   return escapeFilterPath(
-    path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
+    path.join(__dirname, "..", "fonts", "LilitaOne-Regular.ttf"),
   );
 }
 
@@ -182,46 +185,32 @@ function buildLanguageFooterFilter(language, tempDir, prefix = "footer") {
   const fontSize = 28;
   const sideMargin = 18;
 
-  return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=yellow:fontsize=${fontSize}:x=max(${sideMargin}\\,(w-text_w)/2):y=h-text_h-40:bordercolor=black:borderw=1.4`;
+  return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=yellow:fontsize=${fontSize}:x=max(${sideMargin}\\,(w-text_w)/2):y=h-text_h-28:bordercolor=black:borderw=1.4`;
 }
 
 function buildStandardTextOverlayFilter(content, tempDir, prefix = "line") {
   const clippedContent = clampContent(content, 500);
-  const lines = wrapTextMobile(clippedContent, 44, 13);
-
-  const boxX = 28;
-  const boxY = 610;
-  const boxW = DEFAULT_W - 56;
-  const boxH = 460;
-
-  const textAreaW = 610;
-  const textAreaX = boxX + Math.floor((boxW - textAreaW) / 2);
-
-  const fontSize = 23;
-  const lineHeight = 31;
-  const topPadding = 24;
-  const bottomPadding = 24;
-
-  const totalTextH = lines.length * lineHeight;
-  const availableH = boxH - topPadding - bottomPadding;
-  const startY =
-    boxY + topPadding + Math.max(0, Math.floor((availableH - totalTextH) / 2));
+  const lines = wrapTextMobile(clippedContent, 34, 14);
 
   const fontPathEscaped = getFontPathEscaped();
+
+  const fontSize = 34;
+  const lineHeight = 43;
+  const startY = 560;
+
   const drawLines = lines.map((line, i) => {
     const y = startY + i * lineHeight;
     const txtPath = path.join(tempDir, `${prefix}_${i + 1}.txt`);
     fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
-    const txtPathEscaped = escapeFilterPath(txtPath);
 
-    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.6`;
+    const txtPathEscaped = escapeFilterPath(txtPath);
+    const color = i % 2 === 0 ? TEXT_WHITE : TEXT_YELLOW;
+
+    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=${color}:fontsize=${fontSize}:x=(w-text_w)/2:y=${y}:bordercolor=black:borderw=3:shadowcolor=black@0.75:shadowx=2:shadowy=3`;
   });
 
   return {
-    filter: [
-      `drawbox=x=${boxX}:y=${boxY}:w=${boxW}:h=${boxH}:color=black@0.72:t=fill`,
-      ...drawLines,
-    ].join(","),
+    filter: drawLines.join(","),
     lines,
   };
 }
@@ -567,87 +556,60 @@ async function createImageBackgroundLayout({
   canvasW,
   canvasH,
 }) {
-  const clippedContent = clampContent(content, 800);
-  const lines = wrapTextMobile(clippedContent, 40, 12);
+ const clippedContent = clampContent(content, 1100);
+const lines = wrapTextMobile(clippedContent, 42, 15);
 
   const IMAGE_TOP_Y = 0;
-  const IMAGE_MAX_H = Math.round(canvasH * 0.42);
-  const OVERLAP_DOWN = Math.max(14, Math.round(canvasH * 0.016));
+  const IMAGE_MAX_H = Math.round(canvasH * 0.38);
+  const textStartY = IMAGE_TOP_Y + IMAGE_MAX_H + Math.round(canvasH * 0.025);
+  const fontPathEscaped = getFontPathEscaped();
+  const fontSize = Math.max(28, Math.round(canvasW * 0.052));
+  const lineHeight = Math.round(fontSize * 1.28);
 
-  const actualImageBottomY = IMAGE_TOP_Y + IMAGE_MAX_H;
-  const textBoxY =
-    actualImageBottomY - OVERLAP_DOWN + Math.round(canvasH * 0.01);
+  const footerReservedH = Math.round(canvasH * 0.09);
+  const maxTextBottomY = canvasH - footerReservedH;
 
-  const textBoxX = Math.round(canvasW * 0.05);
-  const textBoxW = canvasW - textBoxX * 2;
-
-  const fontSize = Math.max(16, Math.round(canvasW * 0.034));
-  const lineHeight = Math.round(fontSize * 1.42);
-
-  const topPadding = Math.max(22, Math.round(canvasH * 0.026));
-  const bottomPadding = Math.max(26, Math.round(canvasH * 0.032));
-  const sidePadding = Math.max(18, Math.round(canvasW * 0.04));
-  const extraSafety = Math.max(18, Math.round(fontSize * 0.8));
-
-  const totalTextH = lines.length * lineHeight;
-
-  const textBoxH = Math.max(
-    Math.round(canvasH * 0.19),
-    Math.min(
-      Math.round(canvasH * 0.41),
-      totalTextH + topPadding + bottomPadding + extraSafety,
-    ),
+  const maxLinesBySpace = Math.max(
+    1,
+    Math.floor((maxTextBottomY - textStartY) / lineHeight),
   );
 
-  const textAreaW = textBoxW - sidePadding * 2;
-  const textAreaX = textBoxX + sidePadding;
+  const safeLines = lines.slice(0, maxLinesBySpace);
 
-  const startY =
-    textBoxY +
-    topPadding +
-    Math.max(
-      0,
-      Math.floor((textBoxH - topPadding - bottomPadding - totalTextH) / 2),
-    );
-
-  const normalizeForTextfile = (text) =>
-    String(text || "")
-      .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'")
-      .replace(/\r?\n/g, " ")
-      .trim();
-
-  const escapeFilterPath = (filePath) =>
-    filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
-
-  const fontPathEscaped = escapeFilterPath(
-    path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
-  );
-
-  const drawLines = lines.map((line, i) => {
-    const y = startY + i * lineHeight;
+  const drawLines = safeLines.map((line, i) => {
+    const y = textStartY + i * lineHeight;
     const txtPath = path.join(tempDir, `bg_line_${i + 1}.txt`);
-    fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
-    const txtPathEscaped = escapeFilterPath(txtPath);
 
-    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=white:fontsize=${fontSize}:x=${textAreaX}:y=${y}:bordercolor=black:borderw=1.7`;
+    fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
+
+    const txtPathEscaped = escapeFilterPath(txtPath);
+    const color = i % 2 === 0 ? "#ece6da" : "#efca19";
+
+    return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=${color}:fontsize=${fontSize}:x=(w-text_w)/2:y=${y}:bordercolor=black:borderw=3:shadowcolor=black@0.85:shadowx=2:shadowy=3`;
   });
+
   const languageFooterFilter = buildLanguageFooterFilter(
     language,
     tempDir,
     "bg_footer",
   );
+
   const overlayFilters = languageFooterFilter
     ? [...drawLines, languageFooterFilter]
     : drawLines;
 
   const filter = [
-    `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
-    `[1:v]scale=${canvasW}:-2:flags=fast_bilinear[imgscaled]`,
-    `[imgscaled]crop=${canvasW}:'min(ih,${IMAGE_MAX_H})':0:'max((ih-${IMAGE_MAX_H})/2,0)'[imgcropped]`,
-    `[bg][imgcropped]overlay=0:${IMAGE_TOP_Y}[base1]`,
-    `[base1]drawbox=x=${textBoxX}:y=${textBoxY}:w=${textBoxW}:h=${textBoxH}:color=black@0.72:t=fill[base2]`,
-    `[base2]${overlayFilters.join(",")},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
+    `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=${canvasW}:${canvasH},fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
+
+    `[1:v]scale=${canvasW}:${IMAGE_MAX_H}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=${canvasW}:${IMAGE_MAX_H},boxblur=18:2,eq=brightness=-0.12:saturation=0.85[imgblur]`,
+
+    `[1:v]scale=${canvasW}:${IMAGE_MAX_H}:force_original_aspect_ratio=decrease:flags=lanczos[imgmain]`,
+
+    `[imgblur][imgmain]overlay=(W-w)/2:(H-h)/2[imgfinal]`,
+
+    `[bg][imgfinal]overlay=0:${IMAGE_TOP_Y}[base1]`,
+
+    `[base1]${overlayFilters.join(",")},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
   const filterFile = path.join(tempDir, "bg_layout_filter.txt");
@@ -665,6 +627,7 @@ async function createImageBackgroundLayout({
     `-c:a aac -b:a 128k`,
     `-movflags +faststart ${q(outputPath)}`,
   ].join(" ");
+
   await runCommand(cmd, "create-image-background-layout");
 
   if (!fs.existsSync(outputPath)) {
@@ -673,7 +636,6 @@ async function createImageBackgroundLayout({
 
   return outputPath;
 }
-
 async function muxWithAudio(videoPath, audioPath, outputPath, seconds) {
   const cmd = `ffmpeg -y -stream_loop -1 -i "${audioPath}" -i "${videoPath}" -map 1:v:0 -map 0:a:0 -t ${seconds} -c:v copy -c:a aac -b:a 128k "${outputPath}"`;
   await runCommand(cmd, "mux-with-audio");
@@ -779,24 +741,33 @@ router.post("/", async (req, res) => {
         `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
       );
 
-      const { width: canvasW, height: canvasH } = await getVideoDimensions(
-        selectedBackgroundVideo,
-      );
-      outputW = canvasW;
-      outputH = canvasH;
+     selectedBackgroundVideo = pickRandomExistingFile(
+  BG_VIDEO_FILES,
+  "No background video found. Expected one of: video1.mp4, video2.mp4, video3.mp4, video4.mp4, video5.mp4",
+);
 
-      await createImageBackgroundLayout({
-        imagePath: sourcePath,
-        backgroundVideoPath: selectedBackgroundVideo,
-        audioPath: audioToUse,
-        outputPath: finalPath,
-        content,
-        language,
-        seconds,
-        tempDir,
-        canvasW,
-        canvasH,
-      });
+console.log(
+  `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
+);
+
+const canvasW = DEFAULT_W;
+const canvasH = DEFAULT_H;
+
+outputW = canvasW;
+outputH = canvasH;
+
+await createImageBackgroundLayout({
+  imagePath: sourcePath,
+  backgroundVideoPath: selectedBackgroundVideo,
+  audioPath: audioToUse,
+  outputPath: finalPath,
+  content,
+  language,
+  seconds,
+  tempDir,
+  canvasW,
+  canvasH,
+});
     } else {
       await renderImageWithTextAndAudio({
         imagePath: sourcePath,
