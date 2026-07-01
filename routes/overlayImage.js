@@ -35,6 +35,10 @@ const OUTPUT_PRESET = "superfast";
 const TRANSITION_DURATION = 0.5;
 const COMMAND_LOG_TAIL_CHARS = 20000;
 
+// Volume nhạc nền khi có voiceUrl
+const BACKGROUND_MUSIC_VOLUME = 0.18;
+const VOICE_VOLUME = 1.0;
+
 // ─── Helpers: Job ─────────────────────────────────────────────────────────────
 function generateJobId() {
   return `bg_image_audio_opt_${Date.now()}_${Math.random()
@@ -74,7 +78,13 @@ function createJob(payload) {
       slideImageUrls: payload.slideImageUrls || [],
       slideSeconds: payload.slideSeconds || null,
       slideLayout: payload.slideLayout || null,
+
+      // audioUrl = nhạc nền
       audioUrl: payload.audioUrl,
+
+      // voiceUrl = giọng đọc chính
+      voiceUrl: payload.voiceUrl || null,
+
       backgroundUrl: payload.backgroundUrl || null,
       seconds: payload.seconds,
       fullAudio: Boolean(payload.fullAudio),
@@ -349,6 +359,7 @@ async function composeImageOnBackground({
   backgroundVideoPath,
   imagePath,
   audioPath,
+  voicePath,
   outputPath,
   seconds,
   canvasW,
@@ -368,19 +379,31 @@ async function composeImageOnBackground({
     radius: cornerRadius,
   });
 
-  const filter = [
+  const hasVoice = Boolean(voicePath);
+
+  const videoFilter = [
     `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
     `[1:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=rgba[fg]`,
     `[bg][fg]overlay=${marginX}:${marginTop}:format=auto,fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
+  const audioFilter = hasVoice
+    ? `;[2:a]volume=${BACKGROUND_MUSIC_VOLUME}[bgm];[3:a]volume=${VOICE_VOLUME}[voice];[bgm][voice]amix=inputs=2:duration=shortest:dropout_transition=0[aout]`
+    : "";
+
+  const audioInputs = hasVoice
+    ? [`-stream_loop -1 -i ${q(audioPath)}`, `-i ${q(voicePath)}`]
+    : [`-stream_loop -1 -i ${q(audioPath)}`];
+
+  const mapAudio = hasVoice ? `-map "[aout]"` : `-map 2:a:0`;
+
   const cmd = [
     `ffmpeg -y`,
     `-stream_loop -1 -i ${q(backgroundVideoPath)}`,
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedImagePath)}`,
-    `-stream_loop -1 -i ${q(audioPath)}`,
-    `-filter_complex "${filter}"`,
-    `-map "[v]" -map 2:a:0`,
+    ...audioInputs,
+    `-filter_complex "${videoFilter}${audioFilter}"`,
+    `-map "[v]" ${mapAudio}`,
     `-t ${Number(seconds).toFixed(3)}`,
     `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -pix_fmt yuv420p -r ${OUTPUT_FPS}`,
     `-c:a aac -b:a 128k`,
@@ -438,6 +461,7 @@ async function buildSlideVideo({
         )} -i ${q(p)}`,
     )
     .join(" ");
+
   const cmd = [
     `ffmpeg -y ${inputArgs}`,
     `-filter_complex_script ${q(scriptPath)}`,
@@ -471,6 +495,7 @@ async function composeSlideOnBackgroundOptimized({
   overlayImagePath,
   slideImagePaths,
   audioPath,
+  voicePath,
   outputPath,
   seconds,
   slideSeconds,
@@ -499,6 +524,7 @@ async function composeSlideOnBackgroundOptimized({
   const slideVideoPath = path.join(tempDir, "slides.mp4");
   const roundedBasePath = path.join(tempDir, "rounded-base.png");
   const slideMaskPath = path.join(tempDir, "slide-mask.png");
+
   const [slideBuild] = await Promise.all([
     buildSlideVideo({
       slideImagePaths,
@@ -522,6 +548,7 @@ async function composeSlideOnBackgroundOptimized({
       radius: cornerRadius,
     }),
   ]);
+
   const {
     expandedSlideCount,
     renderedSlideCount,
@@ -529,7 +556,9 @@ async function composeSlideOnBackgroundOptimized({
     transitionDuration,
   } = slideBuild;
 
-  const filter = [
+  const hasVoice = Boolean(voicePath);
+
+  const videoFilter = [
     `[0:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
     `[1:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),format=rgba[base]`,
     `[2:v]fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=rgb24[slidesrgb]`,
@@ -539,15 +568,25 @@ async function composeSlideOnBackgroundOptimized({
     `[basev][slides]overlay=${slotX}:${slotY}:format=auto,fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
+  const audioFilter = hasVoice
+    ? `;[4:a]volume=${BACKGROUND_MUSIC_VOLUME}[bgm];[5:a]volume=${VOICE_VOLUME}[voice];[bgm][voice]amix=inputs=2:duration=shortest:dropout_transition=0[aout]`
+    : "";
+
+  const audioInputs = hasVoice
+    ? [`-stream_loop -1 -i ${q(audioPath)}`, `-i ${q(voicePath)}`]
+    : [`-stream_loop -1 -i ${q(audioPath)}`];
+
+  const mapAudio = hasVoice ? `-map "[aout]"` : `-map 4:a:0`;
+
   const cmd = [
     `ffmpeg -y`,
     `-stream_loop -1 -i ${q(backgroundVideoPath)}`,
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedBasePath)}`,
     `-stream_loop -1 -i ${q(slideVideoPath)}`,
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(slideMaskPath)}`,
-    `-stream_loop -1 -i ${q(audioPath)}`,
-    `-filter_complex "${filter}"`,
-    `-map "[v]" -map 4:a:0`,
+    ...audioInputs,
+    `-filter_complex "${videoFilter}${audioFilter}"`,
+    `-map "[v]" ${mapAudio}`,
     `-t ${Number(seconds).toFixed(3)}`,
     `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -pix_fmt yuv420p -r ${OUTPUT_FPS}`,
     `-c:a aac -b:a 128k`,
@@ -583,6 +622,7 @@ async function processVideo(jobId, onProgress = () => {}) {
     slideSeconds,
     slideLayout,
     audioUrl,
+    voiceUrl,
     backgroundUrl,
     seconds,
     fullAudio,
@@ -599,6 +639,7 @@ async function processVideo(jobId, onProgress = () => {}) {
 
     const imagePath = path.join(tempDir, "image.jpg");
     const audioPath = path.join(tempDir, "audio.mp3");
+    const voicePath = path.join(tempDir, "voice.mp3");
     const downloadedBgPath = path.join(tempDir, "background.mp4");
     const finalPath = path.join(tempDir, "final.mp4");
     const slideImagePaths = slideImageUrls.map((_, index) =>
@@ -615,6 +656,10 @@ async function processVideo(jobId, onProgress = () => {}) {
       downloadFile(imageUrl, imagePath),
       downloadFile(audioUrl, audioPath),
     ];
+
+    if (voiceUrl) {
+      mainDownloads.push(downloadFile(voiceUrl, voicePath));
+    }
 
     if (backgroundUrl) {
       mainDownloads.push(downloadFile(backgroundUrl, downloadedBgPath));
@@ -650,7 +695,14 @@ async function processVideo(jobId, onProgress = () => {}) {
 
     let effectiveSeconds = Number(seconds);
 
-    if (fullAudio) {
+    if (voiceUrl) {
+      onProgress({
+        progress: 30,
+        step: "probe-voice",
+        message: "Đang lấy thời lượng voice...",
+      });
+      effectiveSeconds = await getMediaDuration(voicePath);
+    } else if (fullAudio) {
       onProgress({
         progress: 30,
         step: "probe-audio",
@@ -693,6 +745,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         overlayImagePath: imagePath,
         slideImagePaths: validSlideImagePaths,
         audioPath,
+        voicePath: voiceUrl ? voicePath : null,
         outputPath: finalPath,
         seconds: effectiveSeconds,
         slideSeconds,
@@ -701,6 +754,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         canvasH,
         tempDir,
       });
+
       expandedSlideCount = slideResult.expandedSlideCount || 0;
       renderedSlideCount = slideResult.renderedSlideCount || 0;
       slideCycleSeconds = slideResult.slideCycleSeconds || null;
@@ -710,6 +764,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         backgroundVideoPath,
         imagePath,
         audioPath,
+        voicePath: voiceUrl ? voicePath : null,
         outputPath: finalPath,
         seconds: effectiveSeconds,
         canvasW,
@@ -756,11 +811,15 @@ async function processVideo(jobId, onProgress = () => {}) {
         duration: Number(effectiveSeconds.toFixed(2)),
         requestedDuration: Number(Number(seconds || 0).toFixed(2)),
         fullAudio: Boolean(fullAudio),
+        useVoice: Boolean(voiceUrl),
+        voiceAsMainDuration: Boolean(voiceUrl),
+        backgroundMusicVolume: voiceUrl ? BACKGROUND_MUSIC_VOLUME : 1,
+        voiceVolume: voiceUrl ? VOICE_VOLUME : null,
         resolution: `${canvasW}x${canvasH}`,
         backgroundSource: backgroundUrl ? "remote_url" : "default_local",
         layout: isSlideMode
-          ? "background video + overlay image + loopable slideshow video + external audio"
-          : "background video + full overlay image + external audio",
+          ? "background video + overlay image + loopable slideshow video + voice + background music"
+          : "background video + full overlay image + voice + background music",
         slideCount: isSlideMode ? validSlideImagePaths.length : 0,
         slideSeconds: isSlideMode ? Number(slideSeconds) : null,
         fallbackToSingleImage,
@@ -831,6 +890,7 @@ router.post("/", async (req, res) => {
   const {
     imageUrl,
     audioUrl,
+    voiceUrl,
     backgroundUrl,
     seconds,
     mode,
@@ -863,6 +923,13 @@ router.post("/", async (req, res) => {
     });
   }
 
+  if (voiceUrl != null && typeof voiceUrl !== "string") {
+    return res.status(400).json({
+      success: false,
+      error: "voiceUrl must be a string",
+    });
+  }
+
   if (isSlideMode && normalizedSlideImageUrls.length < 2) {
     return res.status(400).json({
       success: false,
@@ -889,10 +956,17 @@ router.post("/", async (req, res) => {
   }
 
   const duration = Number(seconds);
-  if (!useFullAudio && (!Number.isFinite(duration) || duration <= 0)) {
+
+  // Nếu có voiceUrl thì không bắt buộc seconds vì video sẽ lấy duration theo voice
+  if (
+    !voiceUrl &&
+    !useFullAudio &&
+    (!Number.isFinite(duration) || duration <= 0)
+  ) {
     return res.status(400).json({
       success: false,
-      error: "seconds must be a positive number when fullAudio is false",
+      error:
+        "seconds must be a positive number when voiceUrl is missing and fullAudio is false",
     });
   }
 
@@ -903,8 +977,9 @@ router.post("/", async (req, res) => {
     slideSeconds: isSlideMode ? normalizedSlideSeconds : null,
     slideLayout: slideLayout || null,
     audioUrl,
+    voiceUrl: voiceUrl || null,
     backgroundUrl,
-    seconds: useFullAudio ? null : duration,
+    seconds: voiceUrl || useFullAudio ? null : duration,
     fullAudio: useFullAudio,
   });
 
@@ -912,16 +987,29 @@ router.post("/", async (req, res) => {
   console.log(`║ 🎬 BG IMAGE AUDIO OPT Job: ${job.id}`);
   console.log(`║ 🧩 Mode: ${isSlideMode ? "SLIDE" : "SINGLE"}`);
   console.log(`║ 🖼️  Image: ${imageUrl.substring(0, 60)}`);
+
   if (isSlideMode) {
     console.log(`║ 🖼️  Slides: ${normalizedSlideImageUrls.length}`);
     console.log(`║ ⏭️  Slide seconds: ${normalizedSlideSeconds}`);
   }
-  console.log(`║ 🎵 Audio: ${audioUrl.substring(0, 60)}`);
+
+  console.log(`║ 🎵 BGM Audio: ${audioUrl.substring(0, 60)}`);
+
+  if (voiceUrl) {
+    console.log(`║ 🗣️  Voice: ${voiceUrl.substring(0, 60)}`);
+  }
+
   console.log(
     `║ 🎞️  Background: ${(backgroundUrl || "DEFAULT_LOCAL_BG").substring(0, 60)}`,
   );
-  console.log(`║ ⏱️  Seconds: ${useFullAudio ? "AUTO_FROM_AUDIO" : duration}`);
+
+  console.log(
+    `║ ⏱️  Seconds: ${
+      voiceUrl ? "AUTO_FROM_VOICE" : useFullAudio ? "AUTO_FROM_AUDIO" : duration
+    }`,
+  );
   console.log(`║ 🎧 Full audio: ${useFullAudio}`);
+  console.log(`║ 🎚️  BGM volume when voice exists: ${BACKGROUND_MUSIC_VOLUME}`);
   console.log(`║ ⚙️  FPS/CRF: ${OUTPUT_FPS}/${OUTPUT_CRF}`);
   console.log(`╚══════════════════════════════════════════════════════╝`);
 

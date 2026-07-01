@@ -24,12 +24,12 @@ const DEFAULT_MIN_SECONDS = 14;
 const DEFAULT_MAX_SECONDS = 16;
 const COMMAND_LOG_TAIL_CHARS = 20000;
 const TEMP_DIR = path.join(__dirname, "..", "temp");
-const BG_VIDEO_FILES = Array.from({ length: 5 }, (_, i) =>
-  path.join(__dirname, "..", `video${i + 1}.mp4`),
-);
-const FALLBACK_AUDIO_FILES = Array.from({ length: 5 }, (_, i) =>
-  path.join(__dirname, "..", `audio${i + 1}.mp3`),
-);
+const DEMO_DIR = path.join(__dirname, "..", "demo");
+const BG_VIDEO_DIR = path.join(DEMO_DIR, "video");
+const FALLBACK_AUDIO_DIR = path.join(DEMO_DIR, "audio");
+
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".webm"];
+const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
 const FONT_PATH = path
   .join(__dirname, "..", "fonts", "LilitaOne-Regular.ttf")
   .replace(/\\/g, "/")
@@ -143,6 +143,32 @@ function getFontPathEscaped() {
   return escapeFilterPath(
     path.join(__dirname, "..", "fonts", "LilitaOne-Regular.ttf"),
   );
+}
+
+function getMediaFilesFromDir(dirPath, allowedExtensions) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(dirPath)
+    .filter((fileName) => {
+      const fullPath = path.join(dirPath, fileName);
+      const ext = path.extname(fileName).toLowerCase();
+
+      return fs.statSync(fullPath).isFile() && allowedExtensions.includes(ext);
+    })
+    .map((fileName) => path.join(dirPath, fileName));
+}
+
+function pickRandomMediaFromDir(dirPath, allowedExtensions, missingMessage) {
+  const files = getMediaFilesFromDir(dirPath, allowedExtensions);
+
+  if (files.length === 0) {
+    throw new Error(missingMessage);
+  }
+
+  return files[Math.floor(Math.random() * files.length)];
 }
 
 function pickRandomExistingFile(filePaths, missingMessage) {
@@ -556,8 +582,8 @@ async function createImageBackgroundLayout({
   canvasW,
   canvasH,
 }) {
- const clippedContent = clampContent(content, 1100);
-const lines = wrapTextMobile(clippedContent, 42, 15);
+  const clippedContent = clampContent(content, 1100);
+  const lines = wrapTextMobile(clippedContent, 42, 15);
 
   const IMAGE_TOP_Y = 0;
   const IMAGE_MAX_H = Math.round(canvasH * 0.38);
@@ -709,9 +735,10 @@ router.post("/", async (req, res) => {
     let audioToUse = customAudioPath;
     let selectedBackgroundVideo = null;
     if (!audioToUse) {
-      audioToUse = pickRandomExistingFile(
-        FALLBACK_AUDIO_FILES,
-        "No fallback audio found. Expected one of: audio1.mp3, audio2.mp3, audio3.mp3, audio4.mp3, audio5.mp3",
+      audioToUse = pickRandomMediaFromDir(
+        FALLBACK_AUDIO_DIR,
+        AUDIO_EXTENSIONS,
+        "No fallback audio found in demo/audio",
       );
 
       console.log(
@@ -732,42 +759,34 @@ router.post("/", async (req, res) => {
       outputW = DEFAULT_W;
       outputH = DEFAULT_H;
     } else if (option === "background") {
-      selectedBackgroundVideo = pickRandomExistingFile(
-        BG_VIDEO_FILES,
-        "No background video found. Expected one of: video1.mp4, video2.mp4, video3.mp4, video4.mp4, video5.mp4",
+      selectedBackgroundVideo = pickRandomMediaFromDir(
+        BG_VIDEO_DIR,
+        VIDEO_EXTENSIONS,
+        "No background video found in demo/video",
       );
 
       console.log(
         `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
       );
 
-     selectedBackgroundVideo = pickRandomExistingFile(
-  BG_VIDEO_FILES,
-  "No background video found. Expected one of: video1.mp4, video2.mp4, video3.mp4, video4.mp4, video5.mp4",
-);
+      const canvasW = DEFAULT_W;
+      const canvasH = DEFAULT_H;
 
-console.log(
-  `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
-);
+      outputW = canvasW;
+      outputH = canvasH;
 
-const canvasW = DEFAULT_W;
-const canvasH = DEFAULT_H;
-
-outputW = canvasW;
-outputH = canvasH;
-
-await createImageBackgroundLayout({
-  imagePath: sourcePath,
-  backgroundVideoPath: selectedBackgroundVideo,
-  audioPath: audioToUse,
-  outputPath: finalPath,
-  content,
-  language,
-  seconds,
-  tempDir,
-  canvasW,
-  canvasH,
-});
+      await createImageBackgroundLayout({
+        imagePath: sourcePath,
+        backgroundVideoPath: selectedBackgroundVideo,
+        audioPath: audioToUse,
+        outputPath: finalPath,
+        content,
+        language,
+        seconds,
+        tempDir,
+        canvasW,
+        canvasH,
+      });
     } else {
       await renderImageWithTextAndAudio({
         imagePath: sourcePath,
