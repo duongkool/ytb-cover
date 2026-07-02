@@ -8,6 +8,8 @@ const { EventEmitter } = require("events");
 const { pipeline } = require("stream");
 
 const { uploadVideo } = require("../utils/uploadVps");
+// UPLOAD TEST
+// const { uploadVideo } = require("../utils/uploadMe");
 
 const execAsync = promisify(exec);
 const pipelineAsync = promisify(pipeline);
@@ -88,6 +90,7 @@ function createJob(payload) {
       backgroundUrl: payload.backgroundUrl || null,
       seconds: payload.seconds,
       fullAudio: Boolean(payload.fullAudio),
+      stillImage: Boolean(payload.stillImage),
     },
     result: null,
     error: null,
@@ -419,6 +422,32 @@ async function composeImageOnBackground({
   return outputPath;
 }
 
+async function composeStillImageVideo({
+  imagePath,
+  audioPath,
+  outputPath,
+  seconds,
+}) {
+  const cmd = [
+    `ffmpeg -y`,
+    `-loop 1 -i ${q(imagePath)}`,
+    `-stream_loop -1 -i ${q(audioPath)}`,
+    `-t ${Number(seconds).toFixed(3)}`,
+    `-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"`,
+    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -r ${OUTPUT_FPS}`,
+    `-c:a aac -b:a 128k`,
+    `-movflags +faststart ${q(outputPath)}`,
+  ].join(" ");
+
+  await runCommand(cmd, "compose-still-image-video");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("composeStillImageVideo failed");
+  }
+
+  return outputPath;
+}
+
 // ─── Step 1: build slideshow video safely ────────────────────────────────────
 async function buildSlideVideo({
   slideImagePaths,
@@ -626,6 +655,7 @@ async function processVideo(jobId, onProgress = () => {}) {
     backgroundUrl,
     seconds,
     fullAudio,
+    stillImage,
   } = job.payload;
 
   const requestedSlideMode = mode === "slide" && slideImageUrls.length > 1;
@@ -666,6 +696,68 @@ async function processVideo(jobId, onProgress = () => {}) {
     }
 
     await Promise.all(mainDownloads);
+
+    if (stillImage) {
+      onProgress({
+        progress: 55,
+        step: "render-still-image",
+        message: "Đang tạo video từ ảnh tĩnh...",
+      });
+
+      await composeStillImageVideo({
+        imagePath,
+        audioPath,
+        outputPath: finalPath,
+        seconds: Number(seconds),
+      });
+
+      onProgress({
+        progress: 88,
+        step: "upload",
+        message: "Đang upload video...",
+      });
+
+      const shortName = `${Date.now().toString(36)}${Math.random()
+        .toString(36)
+        .slice(2, 6)}.mp4`;
+
+      const uploadResult = await uploadVideo(finalPath, shortName);
+
+      if (!uploadResult?.url) {
+        throw new Error("Upload failed");
+      }
+
+      onProgress({
+        progress: 98,
+        step: "cleanup",
+        message: "Đang dọn file tạm...",
+      });
+
+      cleanupTempDir(tempDir);
+
+      onProgress({
+        progress: 100,
+        step: "done",
+        message: "Hoàn thành!",
+      });
+
+      return {
+        success: true,
+        url: uploadResult.url,
+        service: uploadResult.service,
+        permanent: uploadResult.permanent || false,
+        metadata: {
+          duration: Number(Number(seconds).toFixed(2)),
+          requestedDuration: Number(Number(seconds).toFixed(2)),
+          stillImage: true,
+          layout: "still image + audio",
+          optimized: true,
+          fps: OUTPUT_FPS,
+          crf: OUTPUT_CRF,
+          preset: OUTPUT_PRESET,
+        },
+      };
+    }
 
     let validSlideImagePaths = [];
 
@@ -898,6 +990,7 @@ router.post("/", async (req, res) => {
     slideSeconds,
     slideLayout,
     fullAudio,
+    stillImage,
   } = req.body || {};
 
   const normalizedSlideImageUrls = Array.isArray(slideImageUrls)
@@ -908,6 +1001,7 @@ router.post("/", async (req, res) => {
 
   const isSlideMode = mode === "slide" || normalizedSlideImageUrls.length > 1;
   const useFullAudio = Boolean(fullAudio);
+  const useStillImage = stillImage === true;
 
   if (!imageUrl || typeof imageUrl !== "string") {
     return res.status(400).json({
@@ -920,6 +1014,16 @@ router.post("/", async (req, res) => {
     return res.status(400).json({
       success: false,
       error: "audioUrl is required",
+    });
+  }
+
+  if (
+    useStillImage &&
+    (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0)
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: "seconds must be a positive number when stillImage is true",
     });
   }
 
@@ -959,6 +1063,7 @@ router.post("/", async (req, res) => {
 
   // Nếu có voiceUrl thì không bắt buộc seconds vì video sẽ lấy duration theo voice
   if (
+    !useStillImage &&
     !voiceUrl &&
     !useFullAudio &&
     (!Number.isFinite(duration) || duration <= 0)
@@ -971,16 +1076,21 @@ router.post("/", async (req, res) => {
   }
 
   const job = createJob({
-    mode: isSlideMode ? "slide" : "single",
+    mode: useStillImage ? "still" : isSlideMode ? "slide" : "single",
     imageUrl,
-    slideImageUrls: normalizedSlideImageUrls,
-    slideSeconds: isSlideMode ? normalizedSlideSeconds : null,
-    slideLayout: slideLayout || null,
+    slideImageUrls: useStillImage ? [] : normalizedSlideImageUrls,
+    slideSeconds: !useStillImage && isSlideMode ? normalizedSlideSeconds : null,
+    slideLayout: !useStillImage ? slideLayout || null : null,
     audioUrl,
-    voiceUrl: voiceUrl || null,
-    backgroundUrl,
-    seconds: voiceUrl || useFullAudio ? null : duration,
-    fullAudio: useFullAudio,
+    voiceUrl: useStillImage ? null : voiceUrl || null,
+    backgroundUrl: useStillImage ? null : backgroundUrl,
+    seconds: useStillImage
+      ? duration
+      : voiceUrl || useFullAudio
+        ? null
+        : duration,
+    fullAudio: useStillImage ? false : useFullAudio,
+    stillImage: useStillImage,
   });
 
   console.log(`\n╔══════════════════════════════════════════════════════╗`);
