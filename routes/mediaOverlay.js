@@ -30,6 +30,7 @@ const FALLBACK_AUDIO_DIR = path.join(DEMO_DIR, "audio");
 
 const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".webm"];
 const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
+
 const FONT_PATH = path
   .join(__dirname, "..", "fonts", "LilitaOne-Regular.ttf")
   .replace(/\\/g, "/")
@@ -40,7 +41,9 @@ if (!fs.existsSync(TEMP_DIR)) {
 }
 
 function generateJobId() {
-  return `simple_media_overlay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `simple_media_overlay_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }
 
 function cleanupTempDir(tempDir) {
@@ -60,7 +63,7 @@ function normalizeText(text) {
     .trim();
 }
 
-function clampContent(text, maxChars = 500) {
+function clampContent(text, maxChars = 1600) {
   const clean = normalizeText(text);
   if (clean.length <= maxChars) return clean;
 
@@ -71,43 +74,91 @@ function clampContent(text, maxChars = 500) {
   const lastSpace = slice.lastIndexOf(" ");
 
   if (lastSpace > 0) {
-    return slice.slice(0, lastSpace).replace(/[ .,!?:;"'”-]+$/, "") + "...";
+    return slice.slice(0, lastSpace).replace(/[ .,!?:;"'”’)-]+$/, "") + "...";
   }
 
-  return clean.slice(0, cutoff).replace(/[ .,!?:;"'”-]+$/, "") + "...";
+  return clean.slice(0, cutoff).replace(/[ .,!?:;"'”’)-]+$/, "") + "...";
 }
 
-function wrapTextMobile(text, maxCharsPerLine = 44, maxLines = 13) {
+function addEllipsisToLine(line, maxCharsPerLine) {
+  const clean = String(line || "").trim();
+
+  if (!clean) return "...";
+
+  const safeMax = Math.max(4, Number(maxCharsPerLine || 44) - 3);
+
+  return clean.slice(0, safeMax).replace(/[ .,!?:;"'”’)\]]+$/, "") + "...";
+}
+
+function limitLinesWithEllipsis(lines, maxLines, maxCharsPerLine) {
+  const safeMaxLines = Math.max(1, Number(maxLines) || 1);
+
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return [""];
+  }
+
+  if (lines.length <= safeMaxLines) {
+    return lines;
+  }
+
+  const visibleLines = lines.slice(0, safeMaxLines);
+  const lastIndex = visibleLines.length - 1;
+
+  visibleLines[lastIndex] = addEllipsisToLine(
+    visibleLines[lastIndex],
+    maxCharsPerLine,
+  );
+
+  return visibleLines;
+}
+
+function wrapTextMobile(text, maxCharsPerLine = 44, maxLines = 17) {
   const clean = normalizeText(text);
   if (!clean) return [""];
 
   const words = clean.split(" ");
   const lines = [];
   let current = "";
+  let truncated = false;
 
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
 
     if (next.length <= maxCharsPerLine) {
       current = next;
-    } else {
-      if (current) lines.push(current);
-      current = word;
-      if (lines.length >= maxLines - 1) break;
+      continue;
     }
+
+    if (current) {
+      lines.push(current);
+    }
+
+    if (lines.length >= maxLines) {
+      truncated = true;
+      break;
+    }
+
+    if (word.length > maxCharsPerLine) {
+      lines.push(addEllipsisToLine(word, maxCharsPerLine));
+      truncated = true;
+      break;
+    }
+
+    current = word;
   }
 
-  if (current && lines.length < maxLines) {
+  if (!truncated && current && lines.length < maxLines) {
     lines.push(current);
+  } else if (current && lines.length >= maxLines) {
+    truncated = true;
   }
 
-  const joined = lines.join(" ");
-  if (clean.length > joined.length && lines.length > 0) {
-    lines[lines.length - 1] =
-      lines[lines.length - 1].replace(/[ .,!?:;"'”-]+$/, "") + "...";
+  if (truncated && lines.length > 0) {
+    const lastIndex = Math.min(lines.length, maxLines) - 1;
+    lines[lastIndex] = addEllipsisToLine(lines[lastIndex], maxCharsPerLine);
   }
 
-  return lines;
+  return lines.slice(0, maxLines);
 }
 
 function q(filePath) {
@@ -131,6 +182,8 @@ function normalizeForTextfile(text) {
   return String(text || "")
     .replace(/[â€œâ€]/g, '"')
     .replace(/[â€˜â€™]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .replace(/\r?\n/g, " ")
     .trim();
 }
@@ -187,12 +240,24 @@ function getLanguageFooterText(language) {
   const footerByLanguage = {
     en: "Full story in comment",
     english: "Full story in comment",
-    pt: "Hist\u00f3ria completa no coment\u00e1rio",
-    portugal: "Hist\u00f3ria completa no coment\u00e1rio",
-    portuguese: "Hist\u00f3ria completa no coment\u00e1rio",
+
+    pt: "História completa no comentário",
+    portugal: "História completa no comentário",
+    portuguese: "História completa no comentário",
+
     es: "Historia completa en el comentario",
     spain: "Historia completa en el comentario",
     spanish: "Historia completa en el comentario",
+
+    de: "Ganze Geschichte im Kommentar",
+    german: "Ganze Geschichte im Kommentar",
+    germany: "Ganze Geschichte im Kommentar",
+
+    fr: "Histoire complète en commentaire",
+    french: "Histoire complète en commentaire",
+    france: "Histoire complète en commentaire",
+    français: "Histoire complète en commentaire",
+    francais: "Histoire complète en commentaire",
   };
 
   const text = footerByLanguage[normalized];
@@ -215,14 +280,16 @@ function buildLanguageFooterFilter(language, tempDir, prefix = "footer") {
 }
 
 function buildStandardTextOverlayFilter(content, tempDir, prefix = "line") {
-  const clippedContent = clampContent(content, 500);
-  const lines = wrapTextMobile(clippedContent, 34, 14);
+  const clippedContent = clampContent(content, 1600);
+
+  const rawLines = wrapTextMobile(clippedContent, 44, 20);
+  const lines = limitLinesWithEllipsis(rawLines, 17, 44);
 
   const fontPathEscaped = getFontPathEscaped();
 
-  const fontSize = 34;
-  const lineHeight = 43;
-  const startY = 560;
+  const fontSize = 30;
+  const lineHeight = 36;
+  const startY = 520;
 
   const drawLines = lines.map((line, i) => {
     const y = startY + i * lineHeight;
@@ -300,6 +367,7 @@ async function downloadFile(url, destPath) {
     maxRedirects: 5,
     maxBodyLength: Infinity,
   });
+
   await pipelineAsync(res.data, fs.createWriteStream(destPath));
   return destPath;
 }
@@ -314,6 +382,7 @@ async function getImageDimensions(filePath) {
   if (!width || !height) {
     throw new Error(`Cannot get image dimensions: ${filePath}`);
   }
+
   return { width, height };
 }
 
@@ -327,6 +396,7 @@ async function getVideoDimensions(filePath) {
   if (!width || !height) {
     throw new Error(`Cannot get video dimensions: ${filePath}`);
   }
+
   return { width, height };
 }
 
@@ -340,6 +410,7 @@ async function getMediaDuration(filePath) {
   if (!Number.isFinite(duration)) {
     throw new Error(`Cannot get duration: ${filePath}`);
   }
+
   return duration;
 }
 
@@ -369,6 +440,7 @@ async function createVideoFromImage(imagePath, outputPath, seconds) {
   ].join(",");
 
   const cmd = `ffmpeg -y -loop 1 -framerate 60 -i "${imagePath}" -t ${seconds} -vf "${vf}" -an -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "${outputPath}"`;
+
   await runCommand(cmd, "create-video-from-image");
 
   if (!fs.existsSync(outputPath)) {
@@ -387,6 +459,7 @@ async function createVideoFromSourceVideo(videoPath, outputPath, seconds) {
   ].join(",");
 
   const cmd = `ffmpeg -y -i "${videoPath}" -t ${seconds} -vf "${vf}" -an -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "${outputPath}"`;
+
   await runCommand(cmd, "create-video-from-source-video");
 
   if (!fs.existsSync(outputPath)) {
@@ -406,18 +479,22 @@ async function renderImageWithTextAndAudio({
   tempDir,
 }) {
   const { width, height } = await getImageDimensions(imagePath);
+
   const scaleFactor = Math.max(DEFAULT_W / width, DEFAULT_H / height);
   const scaledW = makeEven(Math.ceil(width * scaleFactor));
   const scaledH = makeEven(Math.ceil(height * scaleFactor));
+
   const panRange = Math.max(scaledW - DEFAULT_W, 0);
   const usablePan = Math.max(0, Math.floor(panRange * 0.35));
   const startX = Math.max(0, Math.floor((panRange - usablePan) / 2));
   const xExpr = usablePan > 0 ? `${startX}+(${usablePan})*(t/${seconds})` : "0";
+
   const { filter: textFilter } = buildStandardTextOverlayFilter(
     content,
     tempDir,
     "fast_line",
   );
+
   const languageFooterFilter = buildLanguageFooterFilter(
     language,
     tempDir,
@@ -469,6 +546,7 @@ async function renderVideoWithTextAndAudio({
     tempDir,
     "fast_video_line",
   );
+
   const languageFooterFilter = buildLanguageFooterFilter(
     language,
     tempDir,
@@ -507,8 +585,10 @@ async function renderVideoWithTextAndAudio({
 }
 
 async function addTextOverlay(inputPath, outputPath, content, tempDir) {
-  const clippedContent = clampContent(content, 500);
-  const lines = wrapTextMobile(clippedContent, 44, 13);
+  const clippedContent = clampContent(content, 1600);
+
+  const rawLines = wrapTextMobile(clippedContent, 46, 18);
+  const lines = limitLinesWithEllipsis(rawLines, 16, 46);
 
   const boxX = 28;
   const boxY = 610;
@@ -518,25 +598,15 @@ async function addTextOverlay(inputPath, outputPath, content, tempDir) {
   const textAreaW = 610;
   const textAreaX = boxX + Math.floor((boxW - textAreaW) / 2);
 
-  const fontSize = 23;
-  const lineHeight = 31;
-  const topPadding = 24;
-  const bottomPadding = 24;
+  const fontSize = 21;
+  const lineHeight = 27;
+  const topPadding = 20;
+  const bottomPadding = 20;
 
   const totalTextH = lines.length * lineHeight;
   const availableH = boxH - topPadding - bottomPadding;
   const startY =
     boxY + topPadding + Math.max(0, Math.floor((availableH - totalTextH) / 2));
-
-  const normalizeForTextfile = (text) =>
-    String(text || "")
-      .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'")
-      .replace(/\r?\n/g, " ")
-      .trim();
-
-  const escapeFilterPath = (filePath) =>
-    filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 
   const fontPathEscaped = escapeFilterPath(
     path.join(__dirname, "..", "fonts", "DejaVuSans-Bold.ttf"),
@@ -561,6 +631,7 @@ async function addTextOverlay(inputPath, outputPath, content, tempDir) {
   fs.writeFileSync(filterFile, filter, "utf8");
 
   const cmd = `ffmpeg -y -i "${inputPath}" -filter_script:v "${filterFile}" -an -c:v libx264 -preset medium -crf 22 -pix_fmt yuv420p "${outputPath}"`;
+
   await runCommand(cmd, "add-text-overlay");
 
   if (!fs.existsSync(outputPath)) {
@@ -582,17 +653,19 @@ async function createImageBackgroundLayout({
   canvasW,
   canvasH,
 }) {
-  const clippedContent = clampContent(content, 1100);
-  const lines = wrapTextMobile(clippedContent, 42, 15);
+  const clippedContent = clampContent(content, 1800);
+  const rawLines = wrapTextMobile(clippedContent, 44, 22);
 
   const IMAGE_TOP_Y = 0;
   const IMAGE_MAX_H = Math.round(canvasH * 0.38);
-  const textStartY = IMAGE_TOP_Y + IMAGE_MAX_H + Math.round(canvasH * 0.025);
-  const fontPathEscaped = getFontPathEscaped();
-  const fontSize = Math.max(28, Math.round(canvasW * 0.052));
-  const lineHeight = Math.round(fontSize * 1.28);
+  const textStartY = IMAGE_TOP_Y + IMAGE_MAX_H + Math.round(canvasH * 0.018);
 
-  const footerReservedH = Math.round(canvasH * 0.09);
+  const fontPathEscaped = getFontPathEscaped();
+
+  const fontSize = Math.max(25, Math.round(canvasW * 0.044));
+  const lineHeight = Math.round(fontSize * 1.18);
+
+  const footerReservedH = Math.round(canvasH * 0.075);
   const maxTextBottomY = canvasH - footerReservedH;
 
   const maxLinesBySpace = Math.max(
@@ -600,7 +673,11 @@ async function createImageBackgroundLayout({
     Math.floor((maxTextBottomY - textStartY) / lineHeight),
   );
 
-  const safeLines = lines.slice(0, maxLinesBySpace);
+  const safeLines = limitLinesWithEllipsis(
+    rawLines,
+    Math.min(maxLinesBySpace, 18),
+    44,
+  );
 
   const drawLines = safeLines.map((line, i) => {
     const y = textStartY + i * lineHeight;
@@ -609,7 +686,7 @@ async function createImageBackgroundLayout({
     fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
 
     const txtPathEscaped = escapeFilterPath(txtPath);
-    const color = i % 2 === 0 ? "#ece6da" : "#efca19";
+    const color = i % 2 === 0 ? TEXT_WHITE : TEXT_YELLOW;
 
     return `drawtext=fontfile='${fontPathEscaped}':textfile='${txtPathEscaped}':reload=0:fontcolor=${color}:fontsize=${fontSize}:x=(w-text_w)/2:y=${y}:bordercolor=black:borderw=3:shadowcolor=black@0.85:shadowx=2:shadowy=3`;
   });
@@ -624,6 +701,9 @@ async function createImageBackgroundLayout({
     ? [...drawLines, languageFooterFilter]
     : drawLines;
 
+  const overlayTextFilter =
+    overlayFilters.length > 0 ? overlayFilters.join(",") : "null";
+
   const filter = [
     `[0:v]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=${canvasW}:${canvasH},fps=${OUTPUT_FPS},setpts=N/(${OUTPUT_FPS}*TB),setsar=1,format=yuv420p[bg]`,
 
@@ -635,7 +715,7 @@ async function createImageBackgroundLayout({
 
     `[bg][imgfinal]overlay=0:${IMAGE_TOP_Y}[base1]`,
 
-    `[base1]${overlayFilters.join(",")},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
+    `[base1]${overlayTextFilter},fps=${OUTPUT_FPS},format=yuv420p,setpts=N/(${OUTPUT_FPS}*TB)[v]`,
   ].join(";");
 
   const filterFile = path.join(tempDir, "bg_layout_filter.txt");
@@ -662,8 +742,10 @@ async function createImageBackgroundLayout({
 
   return outputPath;
 }
+
 async function muxWithAudio(videoPath, audioPath, outputPath, seconds) {
   const cmd = `ffmpeg -y -stream_loop -1 -i "${audioPath}" -i "${videoPath}" -map 1:v:0 -map 0:a:0 -t ${seconds} -c:v copy -c:a aac -b:a 128k "${outputPath}"`;
+
   await runCommand(cmd, "mux-with-audio");
 
   if (!fs.existsSync(outputPath)) {
@@ -689,9 +771,10 @@ router.post("/", async (req, res) => {
   }
 
   if (!content || typeof content !== "string" || content.trim().length < 10) {
-    return res
-      .status(400)
-      .json({ success: false, error: "content is required (min 10 chars)" });
+    return res.status(400).json({
+      success: false,
+      error: "content is required (min 10 chars)",
+    });
   }
 
   if (!["image", "video"].includes(type)) {
@@ -728,12 +811,14 @@ router.post("/", async (req, res) => {
       tempDir,
       type === "video" ? "source.mp4" : "source.jpg",
     );
+
     const finalPath = path.join(tempDir, "final.mp4");
 
     await downloadFile(url, sourcePath);
 
     let audioToUse = customAudioPath;
     let selectedBackgroundVideo = null;
+
     if (!audioToUse) {
       audioToUse = pickRandomMediaFromDir(
         FALLBACK_AUDIO_DIR,
@@ -756,6 +841,7 @@ router.post("/", async (req, res) => {
         seconds,
         tempDir,
       });
+
       outputW = DEFAULT_W;
       outputH = DEFAULT_H;
     } else if (option === "background") {
@@ -766,7 +852,9 @@ router.post("/", async (req, res) => {
       );
 
       console.log(
-        `[mediaOverlay] Random background video selected: ${path.basename(selectedBackgroundVideo)}`,
+        `[mediaOverlay] Random background video selected: ${path.basename(
+          selectedBackgroundVideo,
+        )}`,
       );
 
       const canvasW = DEFAULT_W;
@@ -797,6 +885,7 @@ router.post("/", async (req, res) => {
         seconds,
         tempDir,
       });
+
       outputW = DEFAULT_W;
       outputH = DEFAULT_H;
     }
@@ -810,7 +899,13 @@ router.post("/", async (req, res) => {
       throw new Error("Upload failed");
     }
 
-    const finalRenderedText = wrapTextMobile(content, 44, 13).join(" ");
+    const metadataText = clampContent(content, 1600);
+    const finalRenderedLines = limitLinesWithEllipsis(
+      wrapTextMobile(metadataText, 44, 20),
+      17,
+      44,
+    );
+    const finalRenderedText = finalRenderedLines.join(" ");
 
     return res.json({
       success: true,
@@ -834,9 +929,9 @@ router.post("/", async (req, res) => {
         backgroundVideoFile: selectedBackgroundVideo
           ? path.basename(selectedBackgroundVideo)
           : null,
-        maxCharsInBox: 500,
+        maxCharsInBox: 1600,
         renderedChars: finalRenderedText.length,
-        renderedLines: wrapTextMobile(content, 44, 13).length,
+        renderedLines: finalRenderedLines.length,
         layout:
           type === "video"
             ? "source video + portrait crop + bold text box + random looping audio"
