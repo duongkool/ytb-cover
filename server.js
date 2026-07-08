@@ -62,6 +62,7 @@ app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 app.use("/api/overlay-image", require("./routes/overlayImage"));
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));
+app.use("/api/upload-media", require("./routes/uploadMedia"));
 const hookV2 = require("./routes/batchHookV5");
 app.use("/api/cover-v2", hookV2);
 
