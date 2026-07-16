@@ -7,8 +7,8 @@ const { spawn } = require("child_process");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
 
-// const { uploadVideo } = require("../utils/uploadVps");
-const { uploadVideo } = require("../utils/uploadService");
+const { uploadVideo } = require("../utils/uploadVps");
+// const { uploadVideo } = require("../utils/uploadService");
 
 const router = express.Router();
 const pipelineAsync = promisify(pipeline);
@@ -1031,7 +1031,7 @@ async function createOverlayPng({
           width="${callWidth}"
           height="${callHeight}"
           rx="${callHeight / 2}"
-          fill="rgba(8,8,8,0.66)"
+         fill="rgba(8,8,8,0.50)"
           stroke="rgba(255,255,255,0.30)"
           stroke-width="1.5"
           filter="url(#mediumShadow)"
@@ -1070,20 +1070,20 @@ async function createOverlayPng({
       <defs>
         
 
-        <filter
-          id="contentShadow"
-          x="-20%"
-          y="-20%"
-          width="140%"
-          height="140%"
-        >
-          <feDropShadow
-            dx="0"
-            dy="6"
-            stdDeviation="9"
-            flood-color="#000000"
-            flood-opacity="0.48"
-          />
+       <filter
+            id="contentShadow"
+            x="-20%"
+            y="-20%"
+            width="140%"
+            height="140%"
+            >
+            <feDropShadow
+                dx="0"
+                dy="4"
+                stdDeviation="7"
+                flood-color="#000000"
+                flood-opacity="0.28"
+            />
         </filter>
 
         <filter
@@ -1144,7 +1144,7 @@ async function createOverlayPng({
               width="${W - headerOuterX * 2}"
               height="${headerHeight}"
               rx="30"
-              fill="rgba(8,8,8,0.46)"
+              fill="rgba(8,8,8,0.40)"
               stroke="rgba(255,255,255,0.18)"
               stroke-width="1.2"
               filter="url(#mediumShadow)"
@@ -1164,7 +1164,7 @@ async function createOverlayPng({
         width="${boxWidth}"
         height="${safeBoxHeight}"
         rx="28"
-        fill="rgba(8,8,8,0.60)"
+        fill="rgba(8,8,8,0.44)"
         stroke="rgba(255,255,255,0.18)"
         stroke-width="1.2"
         filter="url(#contentShadow)"
