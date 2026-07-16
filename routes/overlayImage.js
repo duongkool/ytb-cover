@@ -430,12 +430,28 @@ async function composeStillImageVideo({
 }) {
   const cmd = [
     `ffmpeg -y`,
-    `-loop 1 -i ${q(imagePath)}`,
+
+    // Giữ nguyên logic ảnh tĩnh
+    `-loop 1 -framerate ${OUTPUT_FPS} -i ${q(imagePath)}`,
+
+    // Giữ nguyên logic lặp audio
     `-stream_loop -1 -i ${q(audioPath)}`,
+
+    // Giữ nguyên thời lượng
     `-t ${Number(seconds).toFixed(3)}`,
-    `-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"`,
-    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -r ${OUTPUT_FPS}`,
+
+    // Chỉ thu nhỏ khi ảnh lớn hơn 1920px ở chiều rộng
+    // hoặc lớn hơn 1920px ở chiều cao.
+    // Luôn giữ nguyên tỷ lệ, không crop, không pad, không ép 9:16.
+    `-vf "scale='if(gt(max(iw,ih),1920),if(gte(iw,ih),1920,-2),trunc(iw/2)*2)':'if(gt(max(iw,ih),1920),if(gte(iw,ih),-2,1920),trunc(ih/2)*2)':flags=lanczos,setsar=1,format=yuv420p"`,
+
+    // Giữ nguyên các thông số encode, chỉ giới hạn thread để tránh OOM
+    `-c:v libx264 -preset ${OUTPUT_PRESET} -crf ${OUTPUT_CRF} -r ${OUTPUT_FPS} -threads 2`,
+
+    // Giữ nguyên audio
     `-c:a aac -b:a 128k`,
+
+    // Giữ nguyên MP4 faststart
     `-movflags +faststart ${q(outputPath)}`,
   ].join(" ");
 
