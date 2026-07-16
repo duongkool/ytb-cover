@@ -60,6 +60,8 @@ app.use("/api/podcastHook", require("./routes/podcastHook"));
 app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 
 app.use("/api/overlay-image", require("./routes/overlayImage"));
+app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
+
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));
 app.use("/api/upload-media", require("./routes/uploadMedia"));
