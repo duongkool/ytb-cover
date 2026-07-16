@@ -7,7 +7,8 @@ const { spawn } = require("child_process");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
 
-const { uploadVideo } = require("../utils/uploadVps");
+// const { uploadVideo } = require("../utils/uploadVps");
+const { uploadVideo } = require("../utils/uploadService");
 
 const router = express.Router();
 const pipelineAsync = promisify(pipeline);
@@ -191,16 +192,15 @@ function getLayoutByLanguage(languageType) {
   }
 
   return {
-    fontFile: "Arial Bold.ttf",
-    fontFamily: "StoryFontDefault",
+    fontFamily: "DejaVu Sans",
 
-    bodyFontSize: 30,
-    bodyLineHeight: 1.27,
+    bodyFontSize: 28,
+    bodyLineHeight: 1.3,
     bodyLineGap: 4,
 
-    nameFontSize: 30,
-    followFontSize: 25,
-    callFontSize: 23,
+    nameFontSize: 28,
+    followFontSize: 23,
+    callFontSize: 21,
   };
 }
 
@@ -228,38 +228,47 @@ function containsCjk(text = "") {
 // TEXT WIDTH
 // ======================================================
 
-function estimateTextWidth(text = "", fontSize = 30) {
+function estimateTextWidth(text = "", fontSize = 28) {
   let width = 0;
 
   for (const character of Array.from(text)) {
     if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(character)) {
       width += fontSize;
-    } else if (/[A-ZĂÂÎȘȚÁÀÃÉÈÊÍÌÓÒÔÕÚÙÜÇÑ]/.test(character)) {
-      width += fontSize * 0.64;
-    } else if (/[a-zăâîșțáàãéèêíìóòôõúùüçñ]/.test(character)) {
-      width += fontSize * 0.525;
+    } else if (/[MW]/.test(character)) {
+      width += fontSize * 0.9;
+    } else if (/[I]/.test(character)) {
+      width += fontSize * 0.34;
+    } else if (/[A-ZĂÂÎȘȚÁÀÃÄÅÆÉÈÊËÍÌÎÏÓÒÔÕÖØÚÙÛÜÇÑ]/.test(character)) {
+      width += fontSize * 0.7;
+    } else if (/[mw]/.test(character)) {
+      width += fontSize * 0.84;
+    } else if (/[ilj]/.test(character)) {
+      width += fontSize * 0.31;
+    } else if (/[a-zăâîșțáàãäåæéèêëíìîïóòôõöøúùûüçñ]/.test(character)) {
+      width += fontSize * 0.57;
     } else if (/[0-9]/.test(character)) {
-      width += fontSize * 0.54;
+      width += fontSize * 0.62;
     } else if (/\s/.test(character)) {
-      width += fontSize * 0.275;
+      width += fontSize * 0.33;
     } else if (/[„“”"'’`]/.test(character)) {
-      width += fontSize * 0.25;
-    } else if (/[.,:;!?()[\]{}]/.test(character)) {
-      width += fontSize * 0.27;
+      width += fontSize * 0.33;
+    } else if (/[.,:;!?]/.test(character)) {
+      width += fontSize * 0.32;
+    } else if (/[()[\]{}]/.test(character)) {
+      width += fontSize * 0.42;
     } else if (/[-–—_/\\]/.test(character)) {
-      width += fontSize * 0.36;
+      width += fontSize * 0.45;
     } else {
-      width += fontSize * 0.4;
+      width += fontSize * 0.52;
     }
   }
 
   return width;
 }
 
-function getWrapTextWidth(text = "", fontSize = 30) {
-  return estimateTextWidth(text, fontSize) * 1.018;
+function getWrapTextWidth(text = "", fontSize = 28) {
+  return estimateTextWidth(text, fontSize) * 1.05;
 }
-
 function getAdvanceTextWidth(text = "", fontSize = 30) {
   return estimateTextWidth(text, fontSize);
 }
@@ -686,14 +695,6 @@ async function createOverlayPng({
 }) {
   const layout = getLayoutByLanguage(languageType);
 
-  const fontPath = path.join(FONT_DIR, layout.fontFile);
-
-  if (!fs.existsSync(fontPath)) {
-    throw new Error(`Font file not found: ${fontPath}`);
-  }
-
-  const fontDataUri = await fontToDataUri(fontPath);
-
   let avatarDataUri = null;
 
   if (avatarPath && fs.existsSync(avatarPath)) {
@@ -755,13 +756,16 @@ async function createOverlayPng({
   const boxOuterX = 26;
   const boxWidth = W - boxOuterX * 2;
 
-  const contentPaddingX = 27;
+  const contentPaddingLeft = 27;
+  const contentPaddingRight = 34;
   const contentPaddingY = 22;
-  const textSafetyX = 9;
 
-  const textStartX = boxOuterX + contentPaddingX + textSafetyX;
+  const textSafetyLeft = 9;
+  const textSafetyRight = 12;
+  const textStartX = boxOuterX + contentPaddingLeft + textSafetyLeft;
 
-  const textRightSafeX = boxOuterX + boxWidth - contentPaddingX - textSafetyX;
+  const textRightSafeX =
+    boxOuterX + boxWidth - contentPaddingRight - textSafetyRight;
 
   const maxTextWidth = textRightSafeX - textStartX;
 
@@ -903,7 +907,7 @@ async function createOverlayPng({
           transform="
             translate(
               ${followX + followWidth - 34},
-              ${followY + 10}
+              ${followY + 35}
             )
             scale(1.08)
           "
@@ -1064,14 +1068,7 @@ async function createOverlayPng({
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <style>
-          @font-face {
-            font-family: '${layout.fontFamily}';
-            src: url('${fontDataUri}');
-            font-weight: 700;
-            font-style: normal;
-          }
-        </style>
+        
 
         <filter
           id="contentShadow"
