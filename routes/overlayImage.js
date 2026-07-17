@@ -9,7 +9,7 @@ const { pipeline } = require("stream");
 
 const { uploadVideo } = require("../utils/uploadVps");
 // UPLOAD TEST
-// const { uploadVideo } = require("../utils/uploadMe");
+// const { uploadVideo } = require("../utils/uploadService");
 
 const execAsync = promisify(exec);
 const pipelineAsync = promisify(pipeline);
@@ -91,6 +91,9 @@ function createJob(payload) {
       seconds: payload.seconds,
       fullAudio: Boolean(payload.fullAudio),
       stillImage: Boolean(payload.stillImage),
+
+      // Chỉ xử lý alpha khi client gửi transparent: true
+      transparent: Boolean(payload.transparent),
     },
     result: null,
     error: null,
@@ -279,6 +282,31 @@ async function renderRoundedImage({ inputPath, outputPath, width, radius }) {
   return outputPath;
 }
 
+async function renderTransparentOverlay({ inputPath, outputPath, width }) {
+  const filter = [
+    `scale=${makeEven(width)}:-2:flags=bicubic`,
+    `format=rgba`,
+  ].join(",");
+
+  const cmd = [
+    `ffmpeg -y`,
+    `-i ${q(inputPath)}`,
+    `-vf "${filter}"`,
+    `-frames:v 1`,
+    `-c:v png`,
+    `-pix_fmt rgba`,
+    q(outputPath),
+  ].join(" ");
+
+  await runCommand(cmd, "render-transparent-overlay");
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to render transparent overlay");
+  }
+
+  return outputPath;
+}
+
 async function renderRoundedMask({ outputPath, width, height, radius }) {
   const filter = [`format=gray`, buildRoundedLumaMask(radius)].join(",");
   const cmd = [
@@ -368,19 +396,39 @@ async function composeImageOnBackground({
   canvasW,
   canvasH,
   tempDir,
+  transparent = false,
 }) {
   const marginX = 10;
   const marginTop = 10;
   const targetW = canvasW - marginX * 2;
   const cornerRadius = 24;
-  const roundedImagePath = path.join(tempDir, "rounded-image.png");
 
-  await renderRoundedImage({
-    inputPath: imagePath,
-    outputPath: roundedImagePath,
-    width: targetW,
-    radius: cornerRadius,
-  });
+  const preparedImagePath = path.join(
+    tempDir,
+    transparent ? "transparent-overlay.png" : "rounded-image.png",
+  );
+
+  /*
+   * Chỉ khi transparent=true mới sử dụng pipeline
+   * bảo toàn alpha.
+   *
+   * Nếu không truyền transparent hoặc transparent=false,
+   * pipeline cũ renderRoundedImage vẫn được giữ nguyên.
+   */
+  if (transparent) {
+    await renderTransparentOverlay({
+      inputPath: imagePath,
+      outputPath: preparedImagePath,
+      width: targetW,
+    });
+  } else {
+    await renderRoundedImage({
+      inputPath: imagePath,
+      outputPath: preparedImagePath,
+      width: targetW,
+      radius: cornerRadius,
+    });
+  }
 
   const hasVoice = Boolean(voicePath);
 
@@ -403,7 +451,7 @@ async function composeImageOnBackground({
   const cmd = [
     `ffmpeg -y`,
     `-stream_loop -1 -i ${q(backgroundVideoPath)}`,
-    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedImagePath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(preparedImagePath)}`,
     ...audioInputs,
     `-filter_complex "${videoFilter}${audioFilter}"`,
     `-map "[v]" ${mapAudio}`,
@@ -672,6 +720,7 @@ async function processVideo(jobId, onProgress = () => {}) {
     seconds,
     fullAudio,
     stillImage,
+    transparent,
   } = job.payload;
 
   const requestedSlideMode = mode === "slide" && slideImageUrls.length > 1;
@@ -683,7 +732,10 @@ async function processVideo(jobId, onProgress = () => {}) {
       throw new Error("Missing background video: us.mp4");
     }
 
-    const imagePath = path.join(tempDir, "image.jpg");
+    const imagePath = path.join(
+      tempDir,
+      transparent ? "image.png" : "image.jpg",
+    );
     const audioPath = path.join(tempDir, "audio.mp3");
     const voicePath = path.join(tempDir, "voice.mp3");
     const downloadedBgPath = path.join(tempDir, "background.mp4");
@@ -878,6 +930,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         canvasW,
         canvasH,
         tempDir,
+        transparent,
       });
     }
 
@@ -941,6 +994,7 @@ async function processVideo(jobId, onProgress = () => {}) {
         fps: OUTPUT_FPS,
         crf: OUTPUT_CRF,
         preset: OUTPUT_PRESET,
+        transparent: Boolean(transparent),
       },
     };
   } catch (error) {
@@ -1007,6 +1061,9 @@ router.post("/", async (req, res) => {
     slideLayout,
     fullAudio,
     stillImage,
+
+    // Mặc định false để không ảnh hưởng logic cũ
+    transparent = false,
   } = req.body || {};
 
   const normalizedSlideImageUrls = Array.isArray(slideImageUrls)
@@ -1016,8 +1073,15 @@ router.post("/", async (req, res) => {
     : [];
 
   const isSlideMode = mode === "slide" || normalizedSlideImageUrls.length > 1;
+
   const useFullAudio = Boolean(fullAudio);
   const useStillImage = stillImage === true;
+
+  const useTransparent =
+    transparent === true ||
+    transparent === "true" ||
+    transparent === 1 ||
+    transparent === "1";
 
   if (!imageUrl || typeof imageUrl !== "string") {
     return res.status(400).json({
@@ -1093,20 +1157,38 @@ router.post("/", async (req, res) => {
 
   const job = createJob({
     mode: useStillImage ? "still" : isSlideMode ? "slide" : "single",
+
     imageUrl,
+
     slideImageUrls: useStillImage ? [] : normalizedSlideImageUrls,
+
     slideSeconds: !useStillImage && isSlideMode ? normalizedSlideSeconds : null,
+
     slideLayout: !useStillImage ? slideLayout || null : null,
+
     audioUrl,
+
     voiceUrl: useStillImage ? null : voiceUrl || null,
+
     backgroundUrl: useStillImage ? null : backgroundUrl,
+
     seconds: useStillImage
       ? duration
       : voiceUrl || useFullAudio
         ? null
         : duration,
+
     fullAudio: useStillImage ? false : useFullAudio,
+
     stillImage: useStillImage,
+
+    /*
+     * stillImage không hỗ trợ alpha nổi trên video,
+     * vì nó tạo video trực tiếp từ chính ảnh.
+     *
+     * Chỉ bật transparent cho single/slide background mode.
+     */
+    transparent: useStillImage ? false : useTransparent,
   });
 
   console.log(`\n╔══════════════════════════════════════════════════════╗`);
