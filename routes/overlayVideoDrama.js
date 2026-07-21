@@ -1,3 +1,5 @@
+// routes/video-content-overlay.js
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -27,16 +29,31 @@ const OUTPUT_PRESET = "veryfast";
 const OUTPUT_AUDIO_BITRATE = "128k";
 const OUTPUT_AUDIO_SAMPLE_RATE = 44100;
 
+// Âm lượng cho chế độ giữ audio gốc.
+const DEFAULT_ORIGINAL_AUDIO_VOLUME = 1;
+
+// audioUrl đóng vai trò nhạc nền khi giữ audio gốc.
+const DEFAULT_BACKGROUND_MUSIC_VOLUME = 0.3;
+
+const MIN_AUDIO_VOLUME = 0;
+const MAX_AUDIO_VOLUME = 2;
+
 const DEFAULT_TEXT_COLOR = "#ffffff";
 const DEFAULT_ACCENT_COLOR = "#d7ff00";
 
-const MAX_VISIBLE_TEXT_CHARS = 900;
 const MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024;
+
+// Vùng hiển thị content.
+const TEXT_AREA_TOP = 500;
+const TEXT_AREA_BOTTOM = 1085;
+
+const DEFAULT_MAX_VISIBLE_CHARS = 850;
+const DEFAULT_MAX_LINES = 15;
 
 const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const COMMAND_LOG_TAIL_CHARS = 30000;
 
-const TEMP_ROOT = path.join(__dirname, "..", "temp", "video-story-overlay");
+const TEMP_ROOT = path.join(__dirname, "..", "temp", "video-content-overlay");
 
 const FONT_DIR = path.join(__dirname, "..", "fonts");
 
@@ -55,7 +72,9 @@ if (!fs.existsSync(TEMP_ROOT)) {
 const jobs = new Map();
 
 function generateJobId() {
-  return `video_story_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `video_content_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }
 
 function createJob(payload) {
@@ -144,16 +163,54 @@ function normalizeHexColor(color, fallback) {
   return HEX_COLOR_RE.test(value) ? value : fallback;
 }
 
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+
+    if (["false", "0", "no", "off", ""].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeAudioVolume(value, fallback) {
+  if (value == null || value === "") {
+    return fallback;
+  }
+
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+
+  return Math.min(MAX_AUDIO_VOLUME, Math.max(MIN_AUDIO_VOLUME, numericValue));
+}
+
 function normalizeLanguage(language) {
   const value = String(language || "")
     .trim()
     .toLowerCase();
 
-  if (["jp", "ja", "japan", "japanese"].includes(value)) {
+  if (["jp", "ja", "japan", "japanese", "nhật", "nhat"].includes(value)) {
     return "jp";
   }
 
-  if (["kr", "ko", "korea", "korean"].includes(value)) {
+  if (["kr", "ko", "korea", "korean", "hàn", "han"].includes(value)) {
     return "kr";
   }
 
@@ -167,12 +224,12 @@ function getLayoutByLanguage(languageType) {
       fontFamily: "StoryFontJP",
 
       bodyFontSize: 27,
-      bodyLineHeight: 1.28,
-      bodyLineGap: 4,
+      bodyLineHeight: 1.22,
+      bodyLineGap: 3,
 
-      nameFontSize: 28,
-      followFontSize: 24,
       callFontSize: 22,
+      maxLines: 15,
+      maxVisibleChars: 720,
     };
   }
 
@@ -181,26 +238,26 @@ function getLayoutByLanguage(languageType) {
       fontFile: "NotoSansKR-Bold.ttf",
       fontFamily: "StoryFontKR",
 
-      bodyFontSize: 28,
-      bodyLineHeight: 1.27,
-      bodyLineGap: 4,
+      bodyFontSize: 27,
+      bodyLineHeight: 1.22,
+      bodyLineGap: 3,
 
-      nameFontSize: 28,
-      followFontSize: 24,
       callFontSize: 22,
+      maxLines: 15,
+      maxVisibleChars: 740,
     };
   }
 
   return {
     fontFamily: "DejaVu Sans",
 
-    bodyFontSize: 28,
-    bodyLineHeight: 1.3,
-    bodyLineGap: 4,
+    bodyFontSize: 24,
+    bodyLineHeight: 1.18,
+    bodyLineGap: 2,
 
-    nameFontSize: 28,
-    followFontSize: 23,
-    callFontSize: 21,
+    callFontSize: 22,
+    maxLines: 19,
+    maxVisibleChars: 1100,
   };
 }
 
@@ -213,9 +270,6 @@ function escapeXml(value = "") {
     .replace(/'/g, "&apos;");
 }
 
-/**
- * Giữ dấu cách đầu segment khi Sharp render SVG.
- */
 function escapeSvgText(value = "") {
   return escapeXml(value).replace(/ /g, "&#160;");
 }
@@ -228,24 +282,24 @@ function containsCjk(text = "") {
 // TEXT WIDTH
 // ======================================================
 
-function estimateTextWidth(text = "", fontSize = 28) {
+function estimateTextWidth(text = "", fontSize = 30) {
   let width = 0;
 
   for (const character of Array.from(text)) {
     if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(character)) {
       width += fontSize;
     } else if (/[MW]/.test(character)) {
-      width += fontSize * 0.9;
+      width += fontSize * 0.93;
     } else if (/[I]/.test(character)) {
-      width += fontSize * 0.34;
+      width += fontSize * 0.35;
     } else if (/[A-ZĂÂÎȘȚÁÀÃÄÅÆÉÈÊËÍÌÎÏÓÒÔÕÖØÚÙÛÜÇÑ]/.test(character)) {
-      width += fontSize * 0.7;
+      width += fontSize * 0.72;
     } else if (/[mw]/.test(character)) {
-      width += fontSize * 0.84;
+      width += fontSize * 0.86;
     } else if (/[ilj]/.test(character)) {
-      width += fontSize * 0.31;
+      width += fontSize * 0.32;
     } else if (/[a-zăâîșțáàãäåæéèêëíìîïóòôõöøúùûüçñ]/.test(character)) {
-      width += fontSize * 0.57;
+      width += fontSize * 0.59;
     } else if (/[0-9]/.test(character)) {
       width += fontSize * 0.62;
     } else if (/\s/.test(character)) {
@@ -257,18 +311,20 @@ function estimateTextWidth(text = "", fontSize = 28) {
     } else if (/[()[\]{}]/.test(character)) {
       width += fontSize * 0.42;
     } else if (/[-–—_/\\]/.test(character)) {
-      width += fontSize * 0.45;
+      width += fontSize * 0.46;
     } else {
-      width += fontSize * 0.52;
+      width += fontSize * 0.54;
     }
   }
 
   return width;
 }
 
-function getWrapTextWidth(text = "", fontSize = 28) {
-  return estimateTextWidth(text, fontSize) * 1.07;
+function getWrapTextWidth(text = "", fontSize = 30) {
+  // Hệ số an toàn để tránh chữ tràn mép phải.
+  return estimateTextWidth(text, fontSize) * 1.1;
 }
+
 function getAdvanceTextWidth(text = "", fontSize = 30) {
   return estimateTextWidth(text, fontSize);
 }
@@ -295,7 +351,6 @@ function parseMarkedContent(text = "") {
 
   while ((match = regex.exec(normalized))) {
     const before = normalized.slice(lastIndex, match.index);
-
     const highlighted = match[1];
 
     if (before) {
@@ -460,7 +515,6 @@ function buildStyledLines({
   fontSize,
 }) {
   const parts = parseMarkedContent(text);
-
   const tokens = tokenizeStyledParts(parts);
 
   const lines = [];
@@ -504,7 +558,6 @@ function buildStyledLines({
 
       if (currentWidth > 0 && currentWidth + spaceWidth <= maxLineWidth) {
         appendSegment(" ", token.accent);
-
         currentWidth += spaceWidth;
       }
 
@@ -542,8 +595,12 @@ function buildStyledLines({
     }
 
     addToken(token);
-
     visibleLength = nextLength;
+
+    if (lines.length >= maxLines) {
+      truncated = true;
+      break;
+    }
   }
 
   pushCurrentLine();
@@ -566,7 +623,7 @@ function buildStyledLines({
 }
 
 // ======================================================
-// DOWNLOAD HELPERS
+// DOWNLOAD
 // ======================================================
 
 async function downloadFile(url, destination) {
@@ -603,27 +660,8 @@ async function downloadFile(url, destination) {
   return destination;
 }
 
-async function fileToDataUri(filePath) {
-  const buffer = await fs.promises.readFile(filePath);
-
-  const metadata = await sharp(buffer).metadata();
-
-  let mime = "image/jpeg";
-
-  if (metadata.format === "png") {
-    mime = "image/png";
-  } else if (metadata.format === "webp") {
-    mime = "image/webp";
-  } else if (metadata.format === "gif") {
-    mime = "image/gif";
-  }
-
-  return `data:${mime};base64,${buffer.toString("base64")}`;
-}
-
 async function fontToDataUri(fontPath) {
   const buffer = await fs.promises.readFile(fontPath);
-
   const extension = path.extname(fontPath).toLowerCase();
 
   const mime = extension === ".otf" ? "font/otf" : "font/ttf";
@@ -632,7 +670,7 @@ async function fontToDataUri(fontPath) {
 }
 
 // ======================================================
-// SVG BODY TEXT
+// SVG TEXT
 // ======================================================
 
 function renderTextLinesSvg({
@@ -649,12 +687,6 @@ function renderTextLinesSvg({
     .map((line, lineIndex) => {
       const y = startY + lineIndex * lineHeightPx;
 
-      /*
-       * QUAN TRỌNG:
-       * Các tspan được nối liền, không có newline hay indentation
-       * ở giữa. Nhờ vậy xml:space="preserve" chỉ giữ khoảng trắng
-       * thật nằm trong segment.text.
-       */
       const tspans = line.segments
         .map((segment) => {
           const segmentText = String(segment.text || "");
@@ -669,80 +701,83 @@ function renderTextLinesSvg({
         })
         .join("");
 
-      /*
-       * Không đặt newline hoặc khoảng trắng trước ${tspans}
-       * bên trong thẻ text.
-       */
-      return `<text x="${startX}" y="${y}" xml:space="preserve" style="white-space:pre" font-family="${fontFamily}" font-size="${fontSize}" font-weight="700" fill="${normalColor}" stroke="rgba(0,0,0,0.56)" stroke-width="1.25" stroke-linejoin="round" paint-order="stroke fill">${tspans}</text>`;
+      return `
+        <text
+          x="${startX}"
+          y="${y}"
+          xml:space="preserve"
+          style="white-space:pre"
+          font-family="${fontFamily}"
+          font-size="${fontSize}"
+          font-weight="800"
+          fill="${normalColor}"
+          stroke="rgba(0,0,0,0.86)"
+          stroke-width="1.45"
+          stroke-linejoin="round"
+          paint-order="stroke fill"
+        >${tspans}</text>
+      `;
     })
     .join("");
 }
 
 // ======================================================
-// OVERLAY PNG
+// OVERLAY
 // ======================================================
 
 async function createOverlayPng({
   outputPath,
-  avatarPath,
   content,
-  languageType,
   call,
-  name,
-  follow,
+  languageType,
   textColor,
   accentColor,
 }) {
   const layout = getLayoutByLanguage(languageType);
 
-  let avatarDataUri = null;
+  let fontFaceSvg = "";
 
-  if (avatarPath && fs.existsSync(avatarPath)) {
-    const normalizedAvatarPath = path.join(
-      path.dirname(outputPath),
-      "avatar-normalized.png",
-    );
+  if (layout.fontFile) {
+    const fontPath = path.join(FONT_DIR, layout.fontFile);
 
-    await sharp(avatarPath)
-      .resize(168, 168, {
-        fit: "cover",
-        position: "centre",
-      })
-      .png()
-      .toFile(normalizedAvatarPath);
+    if (!fs.existsSync(fontPath)) {
+      throw new Error(`Font file not found: ${fontPath}`);
+    }
 
-    avatarDataUri = await fileToDataUri(normalizedAvatarPath);
+    const fontDataUri = await fontToDataUri(fontPath);
+
+    fontFaceSvg = `
+      <style>
+        @font-face {
+          font-family: '${layout.fontFamily}';
+          src: url('${fontDataUri}');
+          font-weight: 700 900;
+        }
+      </style>
+    `;
   }
 
-  const safeName = typeof name === "string" ? name.trim() : "";
-
-  const safeFollow = typeof follow === "string" ? follow.trim() : "";
+  const safeContent = typeof content === "string" ? content.trim() : "";
 
   const safeCall = typeof call === "string" ? call.trim() : "";
-
-  const hasHeader = Boolean(avatarDataUri || safeName || safeFollow);
 
   const hasCall = Boolean(safeCall);
 
   // ====================================================
-  // HEADER
+  // CONTENT
   // ====================================================
 
-  const headerOuterX = 24;
-  const headerTop = 30;
-  const headerHeight = hasHeader ? 110 : 0;
+  const boxOuterX = 24;
+  const boxWidth = W - boxOuterX * 2;
 
-  // ====================================================
-  // BODY
-  // ====================================================
+  const contentPaddingLeft = 24;
+  const contentPaddingRight = 34;
+  const contentPaddingTop = 18;
+  const contentPaddingBottom = 20;
 
-  const bodyTop = hasHeader ? headerTop + headerHeight + 16 : 32;
+  const textStartX = boxOuterX + contentPaddingLeft;
 
-  const callReservedHeight = hasCall ? 116 : 34;
-
-  const bodyBottom = H - callReservedHeight;
-
-  const availableBodyHeight = bodyBottom - bodyTop;
+  const maxTextWidth = boxWidth - contentPaddingLeft - contentPaddingRight;
 
   const fontSize = layout.bodyFontSize;
 
@@ -750,38 +785,23 @@ async function createOverlayPng({
 
   const lineGap = layout.bodyLineGap;
 
-  /*
-   * Thu hẹp nhẹ vùng text để không sát mép phải.
-   */
-  const boxOuterX = 26;
-  const boxWidth = W - boxOuterX * 2;
+  const maximumHeight = TEXT_AREA_BOTTOM - TEXT_AREA_TOP;
 
-  const contentPaddingLeft = 27;
-  const contentPaddingRight = 34;
-  const contentPaddingY = 22;
-
-  const textSafetyLeft = 9;
-  const textSafetyRight = 12;
-  const textStartX = boxOuterX + contentPaddingLeft + textSafetyLeft;
-
-  const textRightSafeX =
-    boxOuterX + boxWidth - contentPaddingRight - textSafetyRight;
-
-  const maxTextWidth = textRightSafeX - textStartX;
-
-  const maxLines = Math.max(
+  const maxLinesByHeight = Math.max(
     1,
     Math.floor(
-      (availableBodyHeight - contentPaddingY * 2 + lineGap) /
+      (maximumHeight - contentPaddingTop - contentPaddingBottom + lineGap) /
         (baseLineHeight + lineGap),
     ),
   );
 
+  const maxLines = Math.min(layout.maxLines, maxLinesByHeight);
+
   const lines = buildStyledLines({
-    text: content,
+    text: safeContent,
     maxLineWidth: maxTextWidth,
     maxLines,
-    maxVisibleChars: MAX_VISIBLE_TEXT_CHARS,
+    maxVisibleChars: layout.maxVisibleChars,
     fontSize,
   });
 
@@ -790,13 +810,18 @@ async function createOverlayPng({
       ? lines.length * baseLineHeight + Math.max(0, lines.length - 1) * lineGap
       : baseLineHeight;
 
-  const desiredBoxHeight = actualTextHeight + contentPaddingY * 2;
+  const boxHeight = actualTextHeight + contentPaddingTop + contentPaddingBottom;
 
-  const contentBoxY = bodyTop;
+  const preferredBoxY = 515;
 
-  const safeBoxHeight = Math.min(desiredBoxHeight, availableBodyHeight);
+  const maximumBoxY = TEXT_AREA_BOTTOM - boxHeight;
 
-  const textStartY = contentBoxY + contentPaddingY + fontSize * 0.9;
+  const contentBoxY = Math.max(
+    TEXT_AREA_TOP,
+    Math.min(preferredBoxY, maximumBoxY),
+  );
+
+  const textStartY = contentBoxY + contentPaddingTop + fontSize * 0.87;
 
   const textLinesSvg = renderTextLinesSvg({
     lines,
@@ -807,187 +832,10 @@ async function createOverlayPng({
     normalColor: textColor,
     accentColor,
     fontFamily: layout.fontFamily,
-    maxRightX: textRightSafeX,
   });
 
   // ====================================================
-  // AVATAR
-  // ====================================================
-
-  const avatarSvg = avatarDataUri
-    ? `
-        <clipPath id="avatarClip">
-          <circle
-            cx="78"
-            cy="84"
-            r="42"
-          />
-        </clipPath>
-
-        <circle
-          cx="78"
-          cy="84"
-          r="45"
-          fill="rgba(255,255,255,0.96)"
-          filter="url(#smallShadow)"
-        />
-
-        <image
-          href="${avatarDataUri}"
-          x="36"
-          y="42"
-          width="84"
-          height="84"
-          preserveAspectRatio="xMidYMid slice"
-          clip-path="url(#avatarClip)"
-        />
-      `
-    : "";
-
-  // ====================================================
-  // FOLLOW
-  // ====================================================
-
-  const followWidth = safeFollow
-    ? Math.min(
-        180,
-        Math.max(
-          112,
-          getAdvanceTextWidth(safeFollow, layout.followFontSize) + 42,
-        ),
-      )
-    : 0;
-
-  const followHeight = 52;
-
-  const followX = W - 36 - followWidth;
-
-  const followY = 48;
-
-  const followCenterX = followX + followWidth / 2;
-
-  const followCenterY = followY + followHeight / 2;
-
-  const followSvg = safeFollow
-    ? `
-        <rect
-          x="${followX}"
-          y="${followY}"
-          width="${followWidth}"
-          height="${followHeight}"
-          rx="${followHeight / 2}"
-          fill="rgba(255,255,255,0.96)"
-          stroke="rgba(255,255,255,0.50)"
-          stroke-width="1"
-          filter="url(#smallShadow)"
-        />
-
-        <text
-          x="${followCenterX}"
-          y="${followCenterY}"
-          text-anchor="middle"
-          dominant-baseline="central"
-          xml:space="preserve"
-          style="white-space: pre;"
-          font-family="${layout.fontFamily}"
-          font-size="${layout.followFontSize}"
-          font-weight="700"
-          fill="#2563eb"
-        >${escapeSvgText(safeFollow)}</text>
-      `
-    : "";
-
-  /*
-   * Cursor nằm chạm nhẹ phần trên của nút Follow.
-   * Đã hạ xuống so với bản trước.
-   */
-  const followCursorSvg = safeFollow
-    ? `
-        <g
-          transform="
-            translate(
-              ${followX + followWidth - 34},
-              ${followY + 35}
-            )
-            scale(1.08)
-          "
-          filter="url(#cursorShadow)"
-        >
-          <path
-            d="
-              M2 1
-              L2 23
-              L8.2 17.2
-              L12.2 26
-              L17.1 23.7
-              L13.1 15.3
-              L21.4 15
-              Z
-            "
-            fill="#ffffff"
-            stroke="#111111"
-            stroke-width="1.8"
-            stroke-linejoin="round"
-          />
-
-          <path
-            d="
-              M2 1
-              L2 23
-              L8.2 17.2
-            "
-            fill="none"
-            stroke="rgba(255,255,255,0.75)"
-            stroke-width="0.7"
-            stroke-linecap="round"
-          />
-        </g>
-      `
-    : "";
-
-  // ====================================================
-  // NAME
-  // ====================================================
-
-  const nameX = avatarDataUri ? 138 : 42;
-
-  const nameMaxWidth = safeFollow ? followX - nameX - 24 : W - nameX - 42;
-
-  let displayName = safeName;
-
-  while (
-    displayName &&
-    getWrapTextWidth(displayName, layout.nameFontSize) > nameMaxWidth
-  ) {
-    displayName = displayName.slice(0, -1);
-  }
-
-  if (displayName && displayName !== safeName) {
-    displayName = `${displayName.trim()}...`;
-  }
-
-  const nameSvg = displayName
-    ? `
-        <text
-          x="${nameX}"
-          y="85"
-          dominant-baseline="central"
-          xml:space="preserve"
-          style="white-space: pre;"
-          font-family="${layout.fontFamily}"
-          font-size="${layout.nameFontSize}"
-          font-weight="700"
-          fill="${textColor}"
-          stroke="rgba(0,0,0,0.60)"
-          stroke-width="1.5"
-          stroke-linejoin="round"
-          paint-order="stroke fill"
-        >${escapeSvgText(displayName)}</text>
-      `
-    : "";
-
-  // ====================================================
-  // CTA
+  // CALL
   // ====================================================
 
   let displayCall = safeCall;
@@ -1016,44 +864,41 @@ async function createOverlayPng({
     : 0;
 
   const callHeight = 62;
-
   const callX = (W - callWidth) / 2;
-
   const callY = H - 106;
-
   const callCenterY = callY + callHeight / 2;
 
   const callSvg = displayCall
     ? `
-        <rect
-          x="${callX}"
-          y="${callY}"
-          width="${callWidth}"
-          height="${callHeight}"
-          rx="${callHeight / 2}"
-         fill="rgba(8,8,8,0.50)"
-          stroke="rgba(255,255,255,0.30)"
-          stroke-width="1.5"
-          filter="url(#mediumShadow)"
-        />
+      <rect
+        x="${callX}"
+        y="${callY}"
+        width="${callWidth}"
+        height="${callHeight}"
+        rx="${callHeight / 2}"
+        fill="rgba(255,255,255,0.08)"
+        stroke="rgba(255,255,255,0.18)"
+        stroke-width="1.5"
+        filter="url(#callShadow)"
+      />
 
-        <text
-          x="${W / 2}"
-          y="${callCenterY}"
-          text-anchor="middle"
-          dominant-baseline="central"
-          xml:space="preserve"
-          style="white-space: pre;"
-          font-family="${layout.fontFamily}"
-          font-size="${layout.callFontSize}"
-          font-weight="700"
-          fill="${textColor}"
-          stroke="rgba(0,0,0,0.52)"
-          stroke-width="1"
-          stroke-linejoin="round"
-          paint-order="stroke fill"
-        >${escapeSvgText(displayCall)}</text>
-      `
+      <text
+        x="${W / 2}"
+        y="${callCenterY}"
+        text-anchor="middle"
+        dominant-baseline="central"
+        xml:space="preserve"
+        style="white-space:pre"
+        font-family="${layout.fontFamily}"
+        font-size="${layout.callFontSize}"
+        font-weight="700"
+        fill="${accentColor}"
+        stroke="rgba(0,0,0,0.72)"
+        stroke-width="1.5"
+        stroke-linejoin="round"
+        paint-order="stroke fill"
+      >${escapeSvgText(displayCall)}</text>
+    `
     : "";
 
   // ====================================================
@@ -1068,105 +913,50 @@ async function createOverlayPng({
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        
+        ${fontFaceSvg}
 
-       <filter
-            id="contentShadow"
-            x="-20%"
-            y="-20%"
-            width="140%"
-            height="140%"
-            >
-            <feDropShadow
-                dx="0"
-                dy="4"
-                stdDeviation="7"
-                flood-color="#000000"
-                flood-opacity="0.28"
-            />
+        <filter
+          id="contentShadow"
+          x="-20%"
+          y="-25%"
+          width="140%"
+          height="150%"
+        >
+          <feDropShadow
+            dx="0"
+            dy="5"
+            stdDeviation="8"
+            flood-color="#000000"
+            flood-opacity="0.40"
+          />
         </filter>
 
         <filter
-          id="mediumShadow"
+          id="callShadow"
           x="-25%"
-          y="-25%"
+          y="-35%"
           width="150%"
-          height="150%"
+          height="170%"
         >
           <feDropShadow
             dx="0"
             dy="5"
             stdDeviation="7"
             flood-color="#000000"
-            flood-opacity="0.42"
-          />
-        </filter>
-
-        <filter
-          id="smallShadow"
-          x="-30%"
-          y="-30%"
-          width="160%"
-          height="160%"
-        >
-          <feDropShadow
-            dx="0"
-            dy="3"
-            stdDeviation="5"
-            flood-color="#000000"
-            flood-opacity="0.36"
-          />
-        </filter>
-
-        <filter
-          id="cursorShadow"
-          x="-50%"
-          y="-50%"
-          width="200%"
-          height="200%"
-        >
-          <feDropShadow
-            dx="0"
-            dy="2"
-            stdDeviation="2.5"
-            flood-color="#000000"
-            flood-opacity="0.62"
+            flood-opacity="0.46"
           />
         </filter>
       </defs>
-
-      ${
-        hasHeader
-          ? `
-            <rect
-              x="${headerOuterX}"
-              y="${headerTop}"
-              width="${W - headerOuterX * 2}"
-              height="${headerHeight}"
-              rx="30"
-              fill="rgba(8,8,8,0.40)"
-              stroke="rgba(255,255,255,0.18)"
-              stroke-width="1.2"
-              filter="url(#mediumShadow)"
-            />
-
-            ${avatarSvg}
-            ${nameSvg}
-            ${followSvg}
-            ${followCursorSvg}
-          `
-          : ""
-      }
 
       <rect
         x="${boxOuterX}"
         y="${contentBoxY}"
         width="${boxWidth}"
-        height="${safeBoxHeight}"
-        rx="28"
-        fill="rgba(8,8,8,0.44)"
-        stroke="rgba(255,255,255,0.18)"
-        stroke-width="1.2"
+        height="${boxHeight}"
+        rx="24"
+        fill="rgba(5,5,5,0.18)"
+        stroke="rgba(255,255,255,0.08)"
+        stroke-width="1"
         filter="url(#contentShadow)"
       />
 
@@ -1174,16 +964,16 @@ async function createOverlayPng({
         x="${boxOuterX + 1}"
         y="${contentBoxY + 1}"
         width="${boxWidth - 2}"
-        height="${Math.max(2, safeBoxHeight - 2)}"
-        rx="27"
-        fill="none"
-        stroke="rgba(255,255,255,0.08)"
+        height="${Math.max(2, boxHeight - 2)}"
+        rx="23"
+        fill="rgba(0,0,0,0.05)"
+        stroke="rgba(255,255,255,0.06)"
         stroke-width="1"
       />
 
       ${textLinesSvg}
 
-      ${callSvg}
+      ${hasCall ? callSvg : ""}
     </svg>
   `;
 
@@ -1204,13 +994,14 @@ async function createOverlayPng({
     lineCount: lines.length,
     language: languageType,
     bodyFontSize: fontSize,
-    boxHeight: safeBoxHeight,
+    boxHeight,
+    boxY: contentBoxY,
     maxTextWidth,
   };
 }
 
 // ======================================================
-// COMMAND RUNNER
+// COMMAND
 // ======================================================
 
 function runCommand(command, args, label) {
@@ -1289,10 +1080,28 @@ async function getVideoDuration(videoPath) {
   const duration = Number(String(stdout).trim());
 
   if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error("Cannot determine background video duration");
+    throw new Error("Cannot determine source video duration");
   }
 
   return duration;
+}
+
+async function hasAudioStream(videoPath) {
+  const args = [
+    "-v",
+    "error",
+    "-select_streams",
+    "a:0",
+    "-show_entries",
+    "stream=index",
+    "-of",
+    "csv=p=0",
+    videoPath,
+  ];
+
+  const { stdout } = await runCommand("ffprobe", args, "probe-source-audio");
+
+  return Boolean(String(stdout || "").trim());
 }
 
 // ======================================================
@@ -1300,45 +1109,87 @@ async function getVideoDuration(videoPath) {
 // ======================================================
 
 async function renderVideo({
-  backgroundPath,
+  videoPath,
   audioPath,
   overlayPath,
   outputPath,
   seconds,
+
+  keepOriginalAudio = false,
+
+  originalAudioVolume = DEFAULT_ORIGINAL_AUDIO_VOLUME,
+
+  backgroundMusicVolume = DEFAULT_BACKGROUND_MUSIC_VOLUME,
 }) {
+  const sourceDuration = await getVideoDuration(videoPath);
+
+  const sourceHasAudio = await hasAudioStream(videoPath);
+
+  const requestedKeepOriginalAudio = normalizeBoolean(keepOriginalAudio, false);
+
+  const shouldMixOriginalAudio = requestedKeepOriginalAudio && sourceHasAudio;
+
   const hasRequestedDuration =
     Number.isFinite(Number(seconds)) && Number(seconds) > 0;
 
   const outputDuration = hasRequestedDuration
     ? Number(seconds)
-    : await getVideoDuration(backgroundPath);
+    : sourceDuration;
 
-  /*
-   * Input 0: video nền.
-   * Input 1: overlay PNG.
-   * Input 2: audio ngoài.
-   *
-   * Không map 0:a.
-   * Audio gốc video nền luôn bị loại bỏ.
-   */
-  const filterComplex = [
-    `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},fps=${OUTPUT_FPS},setsar=1,format=yuv420p[background]`,
+  const safeOriginalAudioVolume = normalizeAudioVolume(
+    originalAudioVolume,
+    DEFAULT_ORIGINAL_AUDIO_VOLUME,
+  );
+
+  const safeBackgroundMusicVolume = normalizeAudioVolume(
+    backgroundMusicVolume,
+    DEFAULT_BACKGROUND_MUSIC_VOLUME,
+  );
+
+  const videoFilters = [
+    `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},fps=${OUTPUT_FPS},setsar=1,format=yuv420p[source]`,
 
     `[1:v]scale=${W}:${H},format=rgba[overlay]`,
 
-    `[background][overlay]overlay=0:0:format=auto,fps=${OUTPUT_FPS},setsar=1,format=yuv420p[video]`,
+    `[source][overlay]overlay=0:0:format=auto,fps=${OUTPUT_FPS},setsar=1,format=yuv420p[video]`,
+  ];
 
-    `[2:a]aresample=${OUTPUT_AUDIO_SAMPLE_RATE}:async=1:first_pts=0,volume=1[audio]`,
-  ].join(";");
+  let audioFilters;
+
+  if (shouldMixOriginalAudio) {
+    /*
+     * 0:a = audio gốc trong video.
+     * 2:a = audioUrl dùng làm nhạc nền.
+     */
+    audioFilters = [
+      `[0:a]aresample=${OUTPUT_AUDIO_SAMPLE_RATE}:async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=${OUTPUT_AUDIO_SAMPLE_RATE}:channel_layouts=stereo,volume=${safeOriginalAudioVolume}[original_audio]`,
+
+      `[2:a]aresample=${OUTPUT_AUDIO_SAMPLE_RATE}:async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=${OUTPUT_AUDIO_SAMPLE_RATE}:channel_layouts=stereo,volume=${safeBackgroundMusicVolume}[background_music]`,
+
+      `[original_audio][background_music]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[audio]`,
+    ];
+  } else {
+    /*
+     * Chế độ mặc định:
+     * loại bỏ audio gốc và dùng audioUrl làm audio chính.
+     */
+    audioFilters = [
+      `[2:a]aresample=${OUTPUT_AUDIO_SAMPLE_RATE}:async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=${OUTPUT_AUDIO_SAMPLE_RATE}:channel_layouts=stereo,volume=1,alimiter=limit=0.95[audio]`,
+    ];
+  }
+
+  const filterComplex = [...videoFilters, ...audioFilters].join(";");
 
   const args = [
     "-y",
 
+    // Loop video nếu seconds dài hơn video nguồn.
     "-stream_loop",
     "-1",
     "-i",
-    backgroundPath,
+    videoPath,
 
+    // Overlay PNG.
     "-loop",
     "1",
     "-framerate",
@@ -1346,6 +1197,7 @@ async function renderVideo({
     "-i",
     overlayPath,
 
+    // Loop audioUrl.
     "-stream_loop",
     "-1",
     "-i",
@@ -1396,7 +1248,13 @@ async function renderVideo({
     outputPath,
   ];
 
-  await runCommand("ffmpeg", args, "render-video-story-overlay");
+  await runCommand(
+    "ffmpeg",
+    args,
+    shouldMixOriginalAudio
+      ? "render-video-original-plus-background"
+      : "render-video-replacement-audio",
+  );
 
   if (!fs.existsSync(outputPath)) {
     throw new Error("FFmpeg did not create output video");
@@ -1410,8 +1268,28 @@ async function renderVideo({
 
   return {
     outputPath,
+
+    sourceDuration: Number(sourceDuration.toFixed(3)),
+
     duration: Number(outputDuration.toFixed(3)),
+
     sizeBytes: stat.size,
+
+    sourceHasAudio,
+
+    requestedKeepOriginalAudio,
+
+    originalAudioKept: shouldMixOriginalAudio,
+
+    audioMode: shouldMixOriginalAudio
+      ? "original_plus_background_music"
+      : "replacement_audio",
+
+    originalAudioVolume: shouldMixOriginalAudio ? safeOriginalAudioVolume : 0,
+
+    backgroundMusicVolume: shouldMixOriginalAudio
+      ? safeBackgroundMusicVolume
+      : 1,
   };
 }
 
@@ -1427,19 +1305,23 @@ async function processJob(jobId) {
   }
 
   const {
-    backgroundUrl,
+    videoUrl,
     audioUrl,
     content,
     language,
     call,
-    name,
-    avatar,
-    follow,
+
     textColor,
     accentColor,
+
     whiteTextColor,
     yellowTextColor,
+
     seconds,
+
+    keepOriginalAudio,
+    originalAudioVolume,
+    backgroundMusicVolume,
   } = job.payload;
 
   const tempDir = path.join(TEMP_ROOT, jobId);
@@ -1448,11 +1330,9 @@ async function processJob(jobId) {
     recursive: true,
   });
 
-  const backgroundPath = path.join(tempDir, "background.mp4");
+  const videoPath = path.join(tempDir, "source-video.mp4");
 
   const audioPath = path.join(tempDir, "external-audio");
-
-  const avatarPath = path.join(tempDir, "avatar-source");
 
   const overlayPath = path.join(tempDir, "overlay.png");
 
@@ -1471,25 +1351,18 @@ async function processJob(jobId) {
     setJob(jobId, {
       progress: 10,
       step: "download",
-      message: "Đang tải video nền và audio...",
+      message: "Đang tải video nguồn và audio...",
     });
 
-    const downloadTasks = [
-      downloadFile(backgroundUrl, backgroundPath),
-
+    await Promise.all([
+      downloadFile(videoUrl, videoPath),
       downloadFile(audioUrl, audioPath),
-    ];
-
-    if (avatar && typeof avatar === "string" && avatar.trim()) {
-      downloadTasks.push(downloadFile(avatar.trim(), avatarPath));
-    }
-
-    await Promise.all(downloadTasks);
+    ]);
 
     setJob(jobId, {
       progress: 35,
       step: "create-overlay",
-      message: "Đang tạo overlay text...",
+      message: "Đang tạo overlay nội dung...",
     });
 
     const languageType = normalizeLanguage(language);
@@ -1506,30 +1379,35 @@ async function processJob(jobId) {
 
     const overlayResult = await createOverlayPng({
       outputPath: overlayPath,
-
-      avatarPath: avatar && fs.existsSync(avatarPath) ? avatarPath : null,
-
       content,
-      languageType,
       call,
-      name,
-      follow,
+      languageType,
       textColor: finalTextColor,
       accentColor: finalAccentColor,
     });
 
+    const useOriginalAudio = normalizeBoolean(keepOriginalAudio, false);
+
     setJob(jobId, {
       progress: 55,
       step: "render-video",
-      message: "Đang ghép video, overlay và audio...",
+      message: useOriginalAudio
+        ? "Đang giữ audio gốc và trộn nhạc nền..."
+        : "Đang loại bỏ audio gốc và dùng audio mới...",
     });
 
     const renderResult = await renderVideo({
-      backgroundPath,
+      videoPath,
       audioPath,
       overlayPath,
       outputPath,
       seconds,
+
+      keepOriginalAudio: useOriginalAudio,
+
+      originalAudioVolume,
+
+      backgroundMusicVolume,
     });
 
     setJob(jobId, {
@@ -1557,6 +1435,8 @@ async function processJob(jobId) {
       metadata: {
         resolution: `${W}x${H}`,
 
+        sourceDuration: renderResult.sourceDuration,
+
         duration: renderResult.duration,
 
         outputSizeBytes: renderResult.sizeBytes,
@@ -1571,17 +1451,29 @@ async function processJob(jobId) {
 
         bodyFontSize: overlayResult.bodyFontSize,
 
+        textBoxY: overlayResult.boxY,
+
+        textBoxHeight: overlayResult.boxHeight,
+
         maxTextWidth: overlayResult.maxTextWidth,
 
-        originalBackgroundAudio: "removed",
+        sourceHasAudio: renderResult.sourceHasAudio,
 
-        audioSource: "audioUrl",
+        requestedKeepOriginalAudio: renderResult.requestedKeepOriginalAudio,
 
-        audioLooped: true,
+        originalAudioKept: renderResult.originalAudioKept,
 
-        backgroundVideoLooped: true,
+        audioMode: renderResult.audioMode,
 
-        layout: "vertical video + rounded text overlay + external audio",
+        originalAudioVolume: renderResult.originalAudioVolume,
+
+        backgroundMusicVolume: renderResult.backgroundMusicVolume,
+
+        audioUrlLooped: true,
+
+        sourceVideoLooped: renderResult.duration > renderResult.sourceDuration,
+
+        layout: "source video + content overlay + configurable audio mixing",
       },
     };
 
@@ -1621,7 +1513,7 @@ async function runJob(jobId) {
   try {
     await processJob(jobId);
   } catch (error) {
-    console.error(`Video story job failed ${jobId}:`, error.message);
+    console.error(`Video content job failed ${jobId}:`, error.message);
   }
 }
 
@@ -1631,14 +1523,11 @@ async function runJob(jobId) {
 
 router.post("/", async (req, res) => {
   const {
-    backgroundUrl,
+    videoUrl,
     audioUrl,
     content,
     language,
     call,
-    name,
-    avatar,
-    follow,
 
     textColor,
     accentColor,
@@ -1647,16 +1536,18 @@ router.post("/", async (req, res) => {
     yellowTextColor,
 
     seconds,
+
+    keepOriginalAudio,
+
+    originalAudioVolume,
+
+    backgroundMusicVolume,
   } = req.body || {};
 
-  if (
-    !backgroundUrl ||
-    typeof backgroundUrl !== "string" ||
-    !backgroundUrl.trim()
-  ) {
+  if (!videoUrl || typeof videoUrl !== "string" || !videoUrl.trim()) {
     return res.status(400).json({
       success: false,
-      error: "backgroundUrl is required",
+      error: "videoUrl is required",
     });
   }
 
@@ -1684,15 +1575,45 @@ router.post("/", async (req, res) => {
     });
   }
 
-  if (avatar != null && typeof avatar !== "string") {
+  if (
+    originalAudioVolume != null &&
+    originalAudioVolume !== "" &&
+    !Number.isFinite(Number(originalAudioVolume))
+  ) {
     return res.status(400).json({
       success: false,
-      error: "avatar must be a string",
+      error: "originalAudioVolume must be a number",
     });
   }
 
+  if (
+    backgroundMusicVolume != null &&
+    backgroundMusicVolume !== "" &&
+    !Number.isFinite(Number(backgroundMusicVolume))
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: "backgroundMusicVolume must be a number",
+    });
+  }
+
+  const normalizedKeepOriginalAudio = normalizeBoolean(
+    keepOriginalAudio,
+    false,
+  );
+
+  const normalizedOriginalAudioVolume = normalizeAudioVolume(
+    originalAudioVolume,
+    DEFAULT_ORIGINAL_AUDIO_VOLUME,
+  );
+
+  const normalizedBackgroundMusicVolume = normalizeAudioVolume(
+    backgroundMusicVolume,
+    DEFAULT_BACKGROUND_MUSIC_VOLUME,
+  );
+
   const job = createJob({
-    backgroundUrl: backgroundUrl.trim(),
+    videoUrl: videoUrl.trim(),
 
     audioUrl: audioUrl.trim(),
 
@@ -1700,35 +1621,40 @@ router.post("/", async (req, res) => {
 
     language: language || null,
 
-    call: typeof call === "string" ? call : "",
-
-    name: typeof name === "string" ? name : "",
-
-    avatar: typeof avatar === "string" ? avatar : "",
-
-    follow: typeof follow === "string" ? follow : "",
+    call: typeof call === "string" ? call.trim() : "",
 
     textColor,
     accentColor,
+
     whiteTextColor,
     yellowTextColor,
 
     seconds: seconds != null ? Number(seconds) : null,
+
+    keepOriginalAudio: normalizedKeepOriginalAudio,
+
+    originalAudioVolume: normalizedOriginalAudioVolume,
+
+    backgroundMusicVolume: normalizedBackgroundMusicVolume,
   });
 
   console.log("\n╔══════════════════════════════════════════════════════╗");
 
-  console.log(`║ 🎬 VIDEO STORY Job: ${job.id}`);
+  console.log(`║ 🎬 VIDEO CONTENT Job: ${job.id}`);
 
-  console.log(`║ 🎞️ Background: ${backgroundUrl.trim().substring(0, 60)}`);
+  console.log(`║ 🎞️ Source: ${videoUrl.trim().substring(0, 60)}`);
 
-  console.log(`║ 🎵 Audio: ${audioUrl.trim().substring(0, 60)}`);
+  console.log(`║ 🎵 External audio: ${audioUrl.trim().substring(0, 60)}`);
 
-  console.log("║ 🔇 Original background audio: REMOVED");
+  console.log(`║ 🔊 Keep original audio: ${normalizedKeepOriginalAudio}`);
+
+  console.log(`║ 🎙️ Original volume: ${normalizedOriginalAudioVolume}`);
+
+  console.log(`║ 🎼 Background volume: ${normalizedBackgroundMusicVolume}`);
 
   console.log(
     `║ ⏱️ Seconds: ${
-      seconds != null ? Number(seconds) : "AUTO_FROM_BACKGROUND"
+      seconds != null ? Number(seconds) : "AUTO_FROM_SOURCE_VIDEO"
     }`,
   );
 
@@ -1744,7 +1670,11 @@ router.post("/", async (req, res) => {
     step: job.step,
     message: job.message,
 
-    pollUrl: `/api/video-story-overlay/${job.id}`,
+    audioMode: normalizedKeepOriginalAudio
+      ? "original_plus_background_music"
+      : "replacement_audio",
+
+    pollUrl: `/api/video-content-overlay/${job.id}`,
   });
 
   setImmediate(() => {
@@ -1798,6 +1728,8 @@ router.delete("/:jobId", (req, res) => {
   }
 
   jobs.delete(req.params.jobId);
+
+  cleanupDirectory(path.join(TEMP_ROOT, req.params.jobId));
 
   return res.json({
     success: true,

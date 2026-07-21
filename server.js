@@ -61,6 +61,10 @@ app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 
 app.use("/api/overlay-image", require("./routes/overlayImage"));
 app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
+app.use(
+  "/api/overlay-story-video-drama",
+  require("./routes/overlayVideoDrama"),
+);
 
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));
