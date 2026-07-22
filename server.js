@@ -57,14 +57,18 @@ app.use(express.static("public"));
 app.use("/api/trim", require("./routes/trim"));
 app.use("/api/cover", require("./routes/cover"));
 app.use("/api/podcastHook", require("./routes/podcastHook"));
-app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 
-app.use("/api/overlay-image", require("./routes/overlayImage"));
-app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
+//ME
+app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
+app.use("/api/black-video", require("./routes/blackVideo"));
 app.use(
   "/api/overlay-story-video-drama",
   require("./routes/overlayVideoDrama"),
 );
+
+//ADMIN
+app.use("/api/overlay-image", require("./routes/overlayImage"));
+app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
 
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));

@@ -33,7 +33,7 @@ const OUTPUT_AUDIO_SAMPLE_RATE = 44100;
 const DEFAULT_ORIGINAL_AUDIO_VOLUME = 1;
 
 // audioUrl đóng vai trò nhạc nền khi giữ audio gốc.
-const DEFAULT_BACKGROUND_MUSIC_VOLUME = 0.3;
+const DEFAULT_BACKGROUND_MUSIC_VOLUME = 0.5;
 
 const MIN_AUDIO_VOLUME = 0;
 const MAX_AUDIO_VOLUME = 2;
@@ -322,7 +322,7 @@ function estimateTextWidth(text = "", fontSize = 30) {
 
 function getWrapTextWidth(text = "", fontSize = 30) {
   // Hệ số an toàn để tránh chữ tràn mép phải.
-  return estimateTextWidth(text, fontSize) * 1.1;
+  return estimateTextWidth(text, fontSize) * 1.04;
 }
 
 function getAdvanceTextWidth(text = "", fontSize = 30) {
@@ -710,6 +710,7 @@ function renderTextLinesSvg({
           font-family="${fontFamily}"
           font-size="${fontSize}"
           font-weight="800"
+          letter-spacing="-0.45"
           fill="${normalColor}"
           stroke="rgba(0,0,0,0.86)"
           stroke-width="1.45"
@@ -1674,7 +1675,7 @@ router.post("/", async (req, res) => {
       ? "original_plus_background_music"
       : "replacement_audio",
 
-    pollUrl: `/api/video-content-overlay/${job.id}`,
+    pollUrl: `/api/overlay-story-video-drama/${job.id}`,
   });
 
   setImmediate(() => {
