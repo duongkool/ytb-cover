@@ -1241,16 +1241,30 @@ async function createStoryCard({
 async function composeVideo({
   backgroundPath,
   cardPath,
+  audioPath,
   outputPath,
   seconds,
   tempDir,
 }) {
+  const duration = Number(seconds);
+
+  if (!Number.isFinite(duration) || duration < 3) {
+    throw new Error("Invalid video duration");
+  }
+
   const filter = [
+    // Chỉ xử lý hình ảnh từ video nền.
+    // Không đưa audio của background video vào output.
     `[0:v]scale=${OUTPUT_W}:${OUTPUT_H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${OUTPUT_W}:${OUTPUT_H},fps=${OUTPUT_FPS},setsar=1,format=gray,eq=contrast=1.08:brightness=-0.035,format=yuv420p[bg]`,
 
     `[1:v]format=rgba[card]`,
 
     `[bg][card]overlay=${CARD_X}:${CARD_Y}:format=auto,fps=${OUTPUT_FPS},format=yuv420p[v]`,
+
+    // Chuẩn hóa audioUrl và cắt đúng thời lượng video.
+    `[2:a]aresample=async=1:first_pts=0,asetpts=N/SR/TB,atrim=duration=${duration.toFixed(
+      3,
+    )}[a]`,
   ].join(";");
 
   const filterPath = path.join(tempDir, "story-card-filter.txt");
@@ -1260,17 +1274,25 @@ async function composeVideo({
   const command = [
     `ffmpeg -y`,
 
+    // Input 0: video nền. Chỉ sử dụng video track.
     `-stream_loop -1 -i ${q(backgroundPath)}`,
 
+    // Input 1: card ảnh tĩnh.
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(cardPath)}`,
+
+    // Input 2: audio bắt buộc.
+    // Lặp audio nếu ngắn hơn thời lượng video.
+    `-stream_loop -1 -i ${q(audioPath)}`,
 
     `-filter_complex_script ${q(filterPath)}`,
 
+    // Chỉ map video đã dựng.
     `-map "[v]"`,
 
-    `-map 0:a?`,
+    // Chỉ map audio từ audioUrl.
+    `-map "[a]"`,
 
-    `-t ${Number(seconds).toFixed(3)}`,
+    `-t ${duration.toFixed(3)}`,
 
     `-c:v libx264`,
 
@@ -1285,6 +1307,10 @@ async function composeVideo({
     `-c:a aac`,
 
     `-b:a 128k`,
+
+    `-ar 44100`,
+
+    `-ac 2`,
 
     `-movflags +faststart`,
 
@@ -1311,7 +1337,8 @@ async function processVideo(jobId, onProgress = () => {}) {
     throw new Error("Job not found");
   }
 
-  const { content, second, call, mode, backgroundUrl, imageUrl } = job.payload;
+  const { content, second, call, mode, backgroundUrl, imageUrl, audioUrl } =
+    job.payload;
 
   const tempDir = path.join(TEMP_DIR, jobId);
 
@@ -1323,6 +1350,8 @@ async function processVideo(jobId, onProgress = () => {}) {
 
   const imagePath = path.join(tempDir, "image-source");
 
+  const audioPath = path.join(tempDir, "audio-source");
+
   const cardPath = path.join(tempDir, "story-card.png");
 
   const finalPath = path.join(tempDir, "final.mp4");
@@ -1331,12 +1360,13 @@ async function processVideo(jobId, onProgress = () => {}) {
     onProgress({
       progress: 10,
       step: "download",
-      message: "Đang tải video nền và hình ảnh...",
+      message: "Đang tải video nền, hình ảnh và audio...",
     });
 
     await Promise.all([
       downloadFile(backgroundUrl, backgroundPath),
       downloadFile(imageUrl, imagePath),
+      downloadFile(audioUrl, audioPath),
     ]);
 
     onProgress({
@@ -1357,12 +1387,13 @@ async function processVideo(jobId, onProgress = () => {}) {
     onProgress({
       progress: 58,
       step: "render-video",
-      message: "Đang ghép card với video nền...",
+      message: "Đang ghép card, video nền và audio...",
     });
 
     await composeVideo({
       backgroundPath,
       cardPath,
+      audioPath,
       outputPath: finalPath,
       seconds: second,
       tempDir,
@@ -1416,37 +1447,27 @@ async function processVideo(jobId, onProgress = () => {}) {
         mode,
         grayscale: true,
 
+        audioSource: "audioUrl",
+        backgroundAudioRemoved: true,
+
         cardX: CARD_X,
         cardY: CARD_Y,
         cardWidth: CARD_W,
         cardHeight: CARD_H,
 
         textPanelHeight: cardResult.textPanelHeight,
-
         imagePanelHeight: cardResult.imagePanelHeight,
-
         contentLines: cardResult.contentLines,
-
         callLines: cardResult.callLines,
-
         fontSize: cardResult.fontSize,
-
         maxTextWidth: cardResult.maxTextWidth,
-
         contentTruncated: cardResult.truncated,
-
         originalChars: cardResult.originalChars,
-
         renderedChars: cardResult.renderedChars,
-
         maxContentChars: MAX_CONTENT_CHARS,
-
         imageRatio: cardResult.imageRatio,
-
         panelRatio: cardResult.panelRatio,
-
         imageStrategy: cardResult.imageStrategy,
-
         usedBlurSideBackground: cardResult.usedBlurSideBackground,
 
         layout:
@@ -1519,6 +1540,7 @@ router.post("/", async (req, res) => {
     mode = "dark",
     backgroundUrl,
     imageUrl,
+    audioUrl,
   } = req.body || {};
 
   const normalizedContent = normalizeText(content);
@@ -1571,6 +1593,13 @@ router.post("/", async (req, res) => {
     });
   }
 
+  if (!audioUrl || typeof audioUrl !== "string" || !audioUrl.trim()) {
+    return res.status(400).json({
+      success: false,
+      error: "audioUrl is required",
+    });
+  }
+
   const job = createJob({
     content: clampedContent.text,
 
@@ -1583,6 +1612,8 @@ router.post("/", async (req, res) => {
     backgroundUrl: backgroundUrl.trim(),
 
     imageUrl: imageUrl.trim(),
+
+    audioUrl: audioUrl.trim(),
   });
 
   console.log("\n╔══════════════════════════════════════════════════════╗");
@@ -1598,6 +1629,7 @@ router.post("/", async (req, res) => {
   );
 
   console.log(`║ 📣 Call: ${normalizedCall || "NONE"}`);
+  console.log(`║ 🎵 Audio: ${audioUrl.trim()}`);
 
   console.log("╚══════════════════════════════════════════════════════╝");
 
