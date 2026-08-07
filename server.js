@@ -65,6 +65,7 @@ app.use(
   "/api/overlay-story-video-drama",
   require("./routes/overlayVideoDrama"),
 );
+app.use("/api/image-to-video-client", require("./routes/imageToVideoClient"));
 
 //ADMIN
 app.use("/api/overlay-image", require("./routes/overlayImage"));
