@@ -11,6 +11,9 @@ const { uploadVideo } = require("../utils/uploadVps");
 // UPLOAD TEST
 // const { uploadVideo } = require("../utils/uploadService");
 
+// UPLOAD TEMP
+// const { uploadVideo } = require("../utils/uploadTempVideo");
+
 const router = express.Router();
 const pipelineAsync = promisify(pipeline);
 

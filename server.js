@@ -3,16 +3,24 @@ const cors = require("cors");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
-const { Server } = require("socket.io");
+
 const config = require("./config");
-const { initWorkerSocket } = require("./sockets/workerSocket");
 const { startVideoCleanupJob } = require("./utils/videoCleanup");
+const { startTempVideoCleanupJob } = require("./utils/tempVideoCleanup");
 
 const app = express();
 
 const VIDEO_DIR = path.join(__dirname, "public", "videos");
 if (!fs.existsSync(VIDEO_DIR)) {
   fs.mkdirSync(VIDEO_DIR, { recursive: true });
+}
+
+const TEMP_VIDEO_DIR = path.join(__dirname, "public", "temp-videos");
+
+if (!fs.existsSync(TEMP_VIDEO_DIR)) {
+  fs.mkdirSync(TEMP_VIDEO_DIR, {
+    recursive: true,
+  });
 }
 
 const allowedOrigins = [
@@ -44,6 +52,21 @@ app.use(
     setHeaders: (res, filePath) => {
       if (filePath.toLowerCase().endsWith(".mp4")) {
         res.setHeader("Cache-Control", "public, max-age=86400");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+      }
+    },
+  }),
+);
+
+app.use(
+  "/temp-videos",
+  express.static(TEMP_VIDEO_DIR, {
+    etag: true,
+    lastModified: true,
+    maxAge: "1h",
+    setHeaders: (res, filePath) => {
+      if (filePath.toLowerCase().endsWith(".mp4")) {
+        res.setHeader("Cache-Control", "public, max-age=3600");
         res.setHeader("Access-Control-Allow-Origin", "*");
       }
     },
@@ -91,28 +114,8 @@ app.get("/api/health", (req, res) => {
 
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  path: "/socket.io",
-  cors: {
-    origin: true,
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
-const { workers, jobs } = initWorkerSocket(io);
-app.use("/api", require("./routes/bulk")({ workers, jobs }));
-
 app.use((err, req, res, next) => {
   console.error("💥 Express error:", err.message);
-
-  if (err instanceof multer.MulterError) {
-    return res.status(400).json({
-      success: false,
-      error: "Upload error",
-      details: err.message,
-    });
-  }
 
   if (
     err.message === "Only video files are allowed" ||
@@ -137,6 +140,7 @@ server.headersTimeout = 0;
 server.keepAliveTimeout = 65000;
 
 startVideoCleanupJob();
+startTempVideoCleanupJob();
 
 server.listen(config.PORT, () => {
   console.log("╔══════════════════════════════════════╗");
