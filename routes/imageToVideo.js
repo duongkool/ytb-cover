@@ -6,7 +6,8 @@ const { spawn } = require("child_process");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
 
-const { uploadVideo } = require("../utils/uploadVps");
+const { uploadVideo: uploadVideoVps } = require("../utils/uploadVps");
+const { uploadVideo: uploadVideoTemp } = require("../utils/uploadTempVideo");
 
 // UPLOAD TEST
 // const { uploadVideo } = require("../utils/uploadService");
@@ -177,7 +178,7 @@ async function createStillImageVideo({
  * }
  */
 router.post("/", async (req, res) => {
-  const { imageUrl, audioUrl, seconds } = req.body || {};
+  const { imageUrl, audioUrl, seconds, tempFile } = req.body || {};
 
   if (typeof imageUrl !== "string" || !imageUrl.trim()) {
     return res.status(400).json({
@@ -201,6 +202,12 @@ router.post("/", async (req, res) => {
       error: "seconds must be a positive number",
     });
   }
+
+  const useTempFile =
+    tempFile === true ||
+    tempFile === "true" ||
+    tempFile === 1 ||
+    tempFile === "1";
 
   const requestId = `still_${Date.now()}_${Math.random()
     .toString(36)
@@ -233,7 +240,9 @@ router.post("/", async (req, res) => {
       .toString(36)
       .slice(2, 6)}.mp4`;
 
-    const uploadResult = await uploadVideo(outputPath, fileName);
+    const uploadResult = useTempFile
+      ? await uploadVideoTemp(outputPath, fileName)
+      : await uploadVideoVps(outputPath, fileName);
 
     if (!uploadResult?.url) {
       throw new Error("Upload video failed");
