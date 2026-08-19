@@ -27,7 +27,6 @@ const allowedOrigins = [
   "http://localhost:3000",
   "https://n8n2.xopboo.com",
   "https://admin.xopboo.com",
-  "https://image-collage-bice.vercel.app",
 ];
 
 app.use(
@@ -81,7 +80,6 @@ app.use("/api/trim", require("./routes/trim"));
 app.use("/api/cover", require("./routes/cover"));
 app.use("/api/podcastHook", require("./routes/podcastHook"));
 
-//ME
 app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 app.use("/api/black-video", require("./routes/blackVideo"));
 app.use("/api/story-image", require("./routes/storyImage.js"));
@@ -90,8 +88,8 @@ app.use(
   require("./routes/overlayVideoDrama"),
 );
 app.use("/api/image-to-video-client", require("./routes/imageToVideoClient"));
+app.use("/api/simple-story", require("./routes/simpleStory"));
 
-//ADMIN
 app.use("/api/overlay-image", require("./routes/overlayImage"));
 app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
 app.use("/api/image-to-video", require("./routes/imageToVideo"));
