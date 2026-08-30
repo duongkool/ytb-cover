@@ -8,7 +8,10 @@ const { spawn } = require("child_process");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
 
-const { uploadVideo } = require("../utils/uploadFilegarden");
+// const { uploadVideo } = require("../utils/uploadFilegarden");
+
+// UPLOAD TEMP
+const { uploadVideo } = require("../utils/uploadTempVideo");
 
 const router = express.Router();
 const pipelineAsync = promisify(pipeline);
@@ -1533,25 +1536,27 @@ async function createVideoFromImageBuffer({
       "-y",
 
       /*
-       * Image từ stdin.
+       * IMAGE INPUT FROM RAM
+       * imageBuffer là PNG lossless
        */
       "-loop",
       "1",
 
       "-framerate",
-      String(OUTPUT_FPS),
+      "30",
 
       "-f",
       "image2pipe",
 
       "-vcodec",
-      "mjpeg",
+      "png",
 
       "-i",
       "pipe:0",
 
       /*
-       * Random audio.
+       * AUDIO INPUT
+       * Loop audio nếu ngắn hơn video
        */
       "-stream_loop",
       "-1",
@@ -1560,8 +1565,7 @@ async function createVideoFromImageBuffer({
       audioPath,
 
       /*
-       * Chỉ lấy video input 0.
-       * Chỉ lấy audio input 1.
+       * MAP INPUTS
        */
       "-map",
       "0:v:0",
@@ -1570,37 +1574,75 @@ async function createVideoFromImageBuffer({
       "1:a:0",
 
       /*
-       * Duration.
+       * DURATION
        */
       "-t",
       Number(seconds).toFixed(3),
 
       /*
-       * Video filter.
+       * VIDEO FILTER
+       *
+       * Giữ đúng tỷ lệ.
+       * Chỉ scale khi chiều lớn nhất > 1920.
+       * Output luôn yuv420p.
        */
       "-vf",
       "scale='if(gt(max(iw,ih),1920),if(gte(iw,ih),1920,-2),trunc(iw/2)*2)':'if(gt(max(iw,ih),1920),if(gte(iw,ih),-2,1920),trunc(ih/2)*2)':flags=lanczos,setsar=1,format=yuv420p",
 
       /*
-       * Video encoder.
+       * H264 - FACEBOOK FRIENDLY
        */
       "-c:v",
       "libx264",
 
+      "-profile:v",
+      "high",
+
+      "-level:v",
+      "4.1",
+
+      /*
+       * Chất lượng cao hơn bản cũ.
+       */
       "-preset",
-      OUTPUT_PRESET,
+      "fast",
 
       "-crf",
-      String(OUTPUT_CRF),
+      "18",
 
+      /*
+       * FPS
+       */
       "-r",
-      String(OUTPUT_FPS),
+      "30",
 
+      /*
+       * GOP = 2 giây
+       * 30 FPS x 2 = 60
+       */
+      "-g",
+      "60",
+
+      "-keyint_min",
+      "60",
+
+      "-sc_threshold",
+      "0",
+
+      /*
+       * Pixel format tương thích tốt Facebook/mobile.
+       */
+      "-pix_fmt",
+      "yuv420p",
+
+      /*
+       * CPU
+       */
       "-threads",
       "2",
 
       /*
-       * Audio.
+       * AUDIO
        */
       "-c:a",
       "aac",
@@ -1608,8 +1650,11 @@ async function createVideoFromImageBuffer({
       "-b:a",
       "128k",
 
+      "-ar",
+      "44100",
+
       /*
-       * Web streaming.
+       * WEB / SOCIAL OPTIMIZATION
        */
       "-movflags",
       "+faststart",
@@ -1617,15 +1662,18 @@ async function createVideoFromImageBuffer({
       outputPath,
     ];
 
-    console.log("\n================ STORY VIDEO ================");
+    console.log(
+      "\n================ STORY VIDEO FACEBOOK OPTIMIZED ================",
+    );
 
     console.log("ffmpeg", args.join(" "));
 
-    console.log("=============================================\n");
+    console.log(
+      "================================================================\n",
+    );
 
     const child = spawn("ffmpeg", args, {
       windowsHide: true,
-
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -1649,33 +1697,34 @@ async function createVideoFromImageBuffer({
     });
 
     child.on("error", (error) => {
-      reject(new Error(`FFmpeg error: ${error.message}`));
+      reject(new Error(`FFmpeg process error: ${error.message}`));
     });
 
     child.on("close", (code) => {
       if (code === 0) {
         if (!fs.existsSync(outputPath)) {
-          reject(new Error("FFmpeg completed but output file does not exist"));
-
-          return;
+          return reject(
+            new Error("FFmpeg completed but output file does not exist"),
+          );
         }
 
-        resolve({
+        return resolve({
           stdout,
           stderr,
         });
-
-        return;
       }
 
       reject(new Error(`FFmpeg failed: ${stderr.trim() || `code ${code}`}`));
     });
 
     /*
-     * Gửi JPEG trực tiếp vào FFmpeg.
+     * Tránh crash nếu FFmpeg đóng stdin sớm.
      */
     child.stdin.on("error", () => {});
 
+    /*
+     * Gửi PNG buffer trực tiếp cho FFmpeg.
+     */
     child.stdin.end(imageBuffer);
   });
 }
@@ -1985,8 +2034,8 @@ router.post("/", async (req, res) => {
      */
 
     const imageBuffer = await sharp(Buffer.from(svg))
-      .jpeg({
-        quality: 95,
+      .png({
+        compressionLevel: 6,
       })
       .toBuffer();
 
