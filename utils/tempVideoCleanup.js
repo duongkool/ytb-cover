@@ -1,10 +1,13 @@
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const { ALLOWED_EXTENSIONS } = require("./uploadTempVideo");
 
 const TEMP_VIDEO_DIR = path.join(__dirname, "..", "public", "temp-videos");
 
-// Video tạm tồn tại tối đa 2 giờ
+const CLEANUP_EXTENSIONS = new Set(ALLOWED_EXTENSIONS);
+
+// Temp media files live for at most 2 hours.
 const MAX_AGE_HOURS = 2;
 
 const MAX_AGE_MS = MAX_AGE_HOURS * 60 * 60 * 1000;
@@ -37,8 +40,7 @@ async function cleanupTempVideos() {
 
       const ext = path.extname(entry.name).toLowerCase();
 
-      // Chỉ xử lý video mp4
-      if (ext !== ".mp4") {
+      if (!CLEANUP_EXTENSIONS.has(ext)) {
         continue;
       }
 
@@ -62,20 +64,20 @@ async function cleanupTempVideos() {
         const ageMinutes = Math.floor(ageMs / (60 * 1000));
 
         console.log(
-          `🗑️ Deleted temp video: ${entry.name} (${ageMinutes} minutes old)`,
+          `🗑️ Deleted temp media: ${entry.name} (${ageMinutes} minutes old)`,
         );
       } catch (error) {
         failed += 1;
 
         console.warn(
-          `⚠️ Cannot cleanup temp video ${entry.name}: ${error.message}`,
+          `⚠️ Cannot cleanup temp media ${entry.name}: ${error.message}`,
         );
       }
     }
 
     if (deleted > 0) {
       console.log(
-        `🧹 Temp video cleanup: scanned=${scanned}, deleted=${deleted}, failed=${failed}`,
+        `🧹 Temp media cleanup: scanned=${scanned}, deleted=${deleted}, failed=${failed}`,
       );
     }
 

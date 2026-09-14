@@ -63,11 +63,9 @@ app.use(
     etag: true,
     lastModified: true,
     maxAge: "1h",
-    setHeaders: (res, filePath) => {
-      if (filePath.toLowerCase().endsWith(".mp4")) {
-        res.setHeader("Cache-Control", "public, max-age=3600");
-        res.setHeader("Access-Control-Allow-Origin", "*");
-      }
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
     },
   }),
 );
@@ -97,6 +95,7 @@ app.use("/api/image-to-video", require("./routes/imageToVideo"));
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));
 app.use("/api/upload-media", require("./routes/uploadMedia"));
+app.use("/api/upload-temp-media", require("./routes/uploadTempMedia"));
 const hookV2 = require("./routes/batchHookV5");
 app.use("/api/cover-v2", hookV2);
 
