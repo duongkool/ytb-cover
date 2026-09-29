@@ -661,7 +661,7 @@ async function createBodyOverlay({
   outputPath,
   content,
   width,
-  fontSize = 29,
+  fontSize = 28,
   lineHeight = 36,
 }) {
   const lines = buildContinuousBodyLines({
@@ -953,7 +953,7 @@ async function renderStoryCard({
   /*
    * Tăng font từ 27 -> 29.
    */
-  const contentFontSize = 29;
+  const contentFontSize = 28;
 
   /*
    * Tăng line height tương ứng.
