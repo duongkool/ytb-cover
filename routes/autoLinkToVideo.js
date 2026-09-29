@@ -43,13 +43,13 @@ const DEFAULT_SECONDS = 15;
  * BODY TYPOGRAPHY
  * =========================================================
  *
- * Giữ font 27px.
+ * Giữ font 26px.
  *
  * Letter spacing âm nhẹ giúp body trên VPS
  * không bị rộng hơn quá mức.
  */
 
-const BODY_FONT_SIZE = 27;
+const BODY_FONT_SIZE = 26;
 const BODY_LINE_HEIGHT = 36;
 const BODY_LETTER_SPACING = -0.35;
 
