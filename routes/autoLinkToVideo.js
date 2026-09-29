@@ -11,8 +11,10 @@ const { promisify } = require("util");
 // UPLOAD
 // const { uploadVideo } = require("../utils/uploadService");
 
-// Nếu muốn dùng:
+// TEMP UPLOAD
 const { uploadVideo } = require("../utils/uploadTempVideo");
+
+// VPS UPLOAD
 // const { uploadVideo } = require("../utils/uploadVps");
 
 const pipelineAsync = promisify(pipeline);
@@ -38,6 +40,21 @@ const DEFAULT_SECONDS = 15;
 
 /*
  * =========================================================
+ * BODY TYPOGRAPHY
+ * =========================================================
+ *
+ * Giữ font 27px.
+ *
+ * Letter spacing âm nhẹ giúp body trên VPS
+ * không bị rộng hơn quá mức.
+ */
+
+const BODY_FONT_SIZE = 27;
+const BODY_LINE_HEIGHT = 36;
+const BODY_LETTER_SPACING = -0.35;
+
+/*
+ * =========================================================
  * PATHS
  * =========================================================
  */
@@ -52,7 +69,12 @@ const FONT_FILE = path.join(__dirname, "..", "fonts", "Arial Bold.ttf");
 
 const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
 
-// Thêm link audio cố định của bạn vào mảng này.
+/*
+ * =========================================================
+ * FIXED AUDIO
+ * =========================================================
+ */
+
 const FIXED_AUDIO_LINKS = [
   "https://video.xopboo.com/media/crystaline-quincas-moreira_1.mp3",
   "https://video.xopboo.com/media/frame-dragging-the-grey-room-density-time.mp3",
@@ -287,7 +309,7 @@ function pickRandomFallbackAudio() {
 
 /*
  * =========================================================
- * LIMIT CONTENT TO 120 WORDS
+ * CONTENT LIMIT
  * =========================================================
  */
 
@@ -309,11 +331,7 @@ function clampStoryContentByWords(text, maxWords = 120) {
 
 /*
  * =========================================================
- * SPLIT SENTENCES
- *
- * Giữ sentence riêng để đổi màu,
- * nhưng phần spacing sẽ được xử lý
- * trong buildContinuousBodyLines().
+ * SENTENCES
  * =========================================================
  */
 
@@ -324,17 +342,6 @@ function splitSentences(text) {
     return [];
   }
 
-  /*
-   * Ví dụ:
-   *
-   * "Hello world. Next sentence."
-   *
-   * =>
-   * [
-   *   "Hello world.",
-   *   "Next sentence."
-   * ]
-   */
   const matches = clean.match(/[^.]+\.?/g) || [];
 
   return matches.map((item) => item.trim()).filter(Boolean);
@@ -344,16 +351,17 @@ function splitSentences(text) {
  * =========================================================
  * WIDTH ESTIMATION
  *
- * Chỉ dùng để quyết định wrap line.
- *
- * Không còn dùng để đặt X giữa các màu.
+ * BODY_LETTER_SPACING phải được tính ở đây
+ * để wrap gần giống SVG render.
  * =========================================================
  */
 
-function estimateTextWidthPx(text, fontSize) {
+function estimateTextWidthPx(text, fontSize, letterSpacing = 0) {
+  const value = String(text || "");
+
   let width = 0;
 
-  for (const char of String(text || "")) {
+  for (const char of value) {
     if (char === " ") {
       width += fontSize * 0.33;
     } else if (/[ilI1.,'":;!|]/.test(char)) {
@@ -369,16 +377,25 @@ function estimateTextWidthPx(text, fontSize) {
     }
   }
 
+  /*
+   * letter-spacing áp dụng giữa các glyph.
+   *
+   * Ví dụ 20 ký tự có khoảng
+   * 19 khoảng letter-spacing.
+   */
+  const spacingCount = Math.max(0, value.length - 1);
+
+  width += spacingCount * letterSpacing;
+
+  /*
+   * Safety margin.
+   */
   return width * 1.03;
 }
 
 /*
  * =========================================================
  * TITLE
- *
- * - tối đa 2 dòng
- * - wrap theo pixel
- * - còn dư => ...
  * =========================================================
  */
 
@@ -401,7 +418,11 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
 
     const candidate = currentLine ? `${currentLine} ${word}` : word;
 
-    if (estimateTextWidthPx(candidate, fontSize) <= maxWidth) {
+    /*
+     * Title không dùng
+     * BODY_LETTER_SPACING.
+     */
+    if (estimateTextWidthPx(candidate, fontSize, 0) <= maxWidth) {
       currentLine = candidate;
 
       index += 1;
@@ -418,15 +439,15 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
     }
 
     /*
-     * Safety nếu 1 word
-     * tự nó rộng hơn box.
+     * Safety nếu một word
+     * rộng hơn cả box.
      */
     let safeWord = "";
 
     for (const char of word) {
       const next = safeWord + char;
 
-      if (estimateTextWidthPx(`${next}...`, fontSize) > maxWidth) {
+      if (estimateTextWidthPx(`${next}...`, fontSize, 0) > maxWidth) {
         break;
       }
 
@@ -444,10 +465,6 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
 
   const hasRemainingWords = index < words.length;
 
-  /*
-   * Nếu còn title chưa hiển thị
-   * thì thêm ...
-   */
   if (hasRemainingWords && lines.length > 0) {
     const lastIndex = lines.length - 1;
 
@@ -455,7 +472,7 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
 
     while (
       lastLine &&
-      estimateTextWidthPx(`${lastLine}...`, fontSize) > maxWidth
+      estimateTextWidthPx(`${lastLine}...`, fontSize, 0) > maxWidth
     ) {
       const parts = lastLine.split(/\s+/).filter(Boolean);
 
@@ -476,39 +493,25 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
  * =========================================================
  * BODY LAYOUT
  *
- * Đây là paragraph liên tục.
+ * Paragraph liền mạch.
  *
- * QUAN TRỌNG:
- *
- * Khi sentence mới bắt đầu:
- *
- * "her." + "All"
- *
- * sẽ trở thành:
- *
- * "her. All"
- *
- * Có đúng 1 space.
+ * Sentence đổi màu nhưng không xuống dòng
+ * chỉ vì gặp dấu ".".
  * =========================================================
  */
 
-function buildContinuousBodyLines({ content, maxWidth, fontSize }) {
+function buildContinuousBodyLines({
+  content,
+  maxWidth,
+  fontSize,
+  letterSpacing,
+}) {
   const sentences = splitSentences(content);
 
   const lines = [];
 
   let currentLine = [];
-
   let currentWidth = 0;
-
-  /*
-   * Có text nào đã được render
-   * trước word hiện tại hay chưa.
-   *
-   * Dùng để đảm bảo sentence mới
-   * vẫn có một dấu cách.
-   */
-  let hasPreviousWord = false;
 
   function pushLine() {
     if (currentLine.length === 0) {
@@ -537,52 +540,38 @@ function buildContinuousBodyLines({ content, maxWidth, fontSize }) {
       const word = words[wordIndex];
 
       /*
-       * Nếu line hiện tại đã có text,
-       * word tiếp theo luôn có 1 space.
-       *
-       * Điều này áp dụng cả khi:
-       *
-       * - cùng sentence
-       * - chuyển sentence / đổi màu
+       * Nếu line đã có chữ:
+       * thêm đúng 1 dấu cách.
        */
       let text = currentLine.length > 0 ? ` ${word}` : word;
 
-      let width = estimateTextWidthPx(text, fontSize);
+      let width = estimateTextWidthPx(text, fontSize, letterSpacing);
 
       /*
-       * Nếu word không vừa line
-       * thì xuống dòng.
+       * Nếu word tiếp theo vượt width:
+       * xuống dòng.
        */
       if (currentLine.length > 0 && currentWidth + width > maxWidth) {
         pushLine();
 
         /*
-         * Đầu line mới không cần space.
+         * Đầu dòng mới không có
+         * leading space.
          */
         text = word;
 
-        width = estimateTextWidthPx(text, fontSize);
+        width = estimateTextWidthPx(text, fontSize, letterSpacing);
       }
 
       const lastSegment = currentLine[currentLine.length - 1];
 
       /*
-       * Nếu cùng màu thì nối
-       * vào cùng tspan.
+       * Cùng màu thì nối
+       * trong cùng tspan.
        */
       if (lastSegment && lastSegment.color === color) {
         lastSegment.text += text;
       } else {
-        /*
-         * Nếu đổi màu ở giữa line:
-         *
-         * text đã chứa leading space.
-         *
-         * Ví dụ:
-         *
-         * white = "...her."
-         * yellow = " All of it..."
-         */
         currentLine.push({
           text,
           color,
@@ -591,8 +580,6 @@ function buildContinuousBodyLines({ content, maxWidth, fontSize }) {
       }
 
       currentWidth += width;
-
-      hasPreviousWord = true;
     }
   }
 
@@ -603,7 +590,7 @@ function buildContinuousBodyLines({ content, maxWidth, fontSize }) {
 
 /*
  * =========================================================
- * ROUNDED TITLE BOX
+ * TITLE BACKGROUND
  * =========================================================
  */
 
@@ -650,10 +637,8 @@ async function createRoundedTitleBox({
  * =========================================================
  * BODY PNG
  *
- * Toàn bộ body được render bằng SVG.
- *
- * Các màu nằm trong cùng một <text>,
- * nên không bị gap giả khi đổi màu.
+ * letter-spacing được set trực tiếp
+ * trong SVG.
  * =========================================================
  */
 
@@ -661,19 +646,17 @@ async function createBodyOverlay({
   outputPath,
   content,
   width,
-  fontSize = 27,
-  lineHeight = 36,
+  fontSize = BODY_FONT_SIZE,
+  lineHeight = BODY_LINE_HEIGHT,
+  letterSpacing = BODY_LETTER_SPACING,
 }) {
   const lines = buildContinuousBodyLines({
     content,
     maxWidth: width,
     fontSize,
+    letterSpacing,
   });
 
-  /*
-   * Padding nhỏ để tránh
-   * chữ bị crop ở trên/dưới.
-   */
   const paddingTop = 5;
   const paddingBottom = 10;
 
@@ -686,12 +669,6 @@ async function createBodyOverlay({
     .map((segments, lineIndex) => {
       const y = paddingTop + fontSize + lineIndex * lineHeight;
 
-      /*
-       * Các tspan được nối liên tục.
-       *
-       * Leading space của segment mới
-       * được giữ nguyên.
-       */
       const tspans = segments
         .map((segment) => {
           return (
@@ -711,6 +688,7 @@ async function createBodyOverlay({
         `font-family="Arial" ` +
         `font-size="${fontSize}" ` +
         `font-weight="700" ` +
+        `letter-spacing="${letterSpacing}px" ` +
         `xml:space="preserve">` +
         `${tspans}` +
         `</text>`
@@ -737,11 +715,8 @@ async function createBodyOverlay({
 
   return {
     outputPath,
-
     width,
-
     height,
-
     lineCount: lines.length,
   };
 }
@@ -761,9 +736,6 @@ function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
 
   const titlePaddingY = 10;
 
-  /*
-   * Title box gần full width.
-   */
   const titleBoxX = cardX + 4;
 
   const titleBoxW = cardW - 8;
@@ -774,16 +746,14 @@ function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
 
   const titleLines = buildTitleLines({
     title,
-
     maxWidth: titleTextMaxWidth,
-
     fontSize: titleFontSize,
   });
 
   const titleBoxH = titleLines.length * titleLineHeight + titlePaddingY * 2;
 
   /*
-   * Chỉ đè thumbnail 2px.
+   * Title đè thumbnail 2px.
    */
   const titleBoxY = imageBottomY - 2;
 
@@ -814,15 +784,10 @@ function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
 
   return {
     filters,
-
     titleLines,
-
     titleBoxX,
-
     titleBoxY,
-
     titleBoxW,
-
     titleBoxH,
   };
 }
@@ -862,7 +827,7 @@ async function renderStoryCard({
 
   /*
    * =====================================================
-   * THUMBNAIL 16:9
+   * THUMBNAIL
    * =====================================================
    */
 
@@ -886,7 +851,7 @@ async function renderStoryCard({
 
   /*
    * =====================================================
-   * CONTENT LIMIT
+   * CONTENT
    * =====================================================
    */
 
@@ -900,13 +865,9 @@ async function renderStoryCard({
 
   const titleLayout = buildTitleFilters({
     title,
-
     tempDir,
-
     cardX,
-
     cardW,
-
     imageBottomY,
   });
 
@@ -916,17 +877,14 @@ async function renderStoryCard({
     titleLines,
 
     titleBoxX,
-
     titleBoxY,
-
     titleBoxW,
-
     titleBoxH,
   } = titleLayout;
 
   /*
    * =====================================================
-   * CREATE TITLE BACKGROUND
+   * TITLE BACKGROUND
    * =====================================================
    */
 
@@ -950,15 +908,11 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  /*
-   * Tăng font từ 27 -> 29.
-   */
-  const contentFontSize = 27;
+  const contentFontSize = BODY_FONT_SIZE;
 
-  /*
-   * Tăng line height tương ứng.
-   */
-  const contentLineHeight = 36;
+  const contentLineHeight = BODY_LINE_HEIGHT;
+
+  const contentLetterSpacing = BODY_LETTER_SPACING;
 
   const contentPaddingX = 24;
 
@@ -968,14 +922,11 @@ async function renderStoryCard({
 
   const contentMaxWidth = cardW - contentPaddingX - contentRightPadding;
 
-  /*
-   * Body nằm dưới title.
-   */
   const contentY = titleBoxY + titleBoxH + 18;
 
   /*
    * =====================================================
-   * CREATE BODY PNG
+   * BODY PNG
    * =====================================================
    */
 
@@ -991,19 +942,13 @@ async function renderStoryCard({
     fontSize: contentFontSize,
 
     lineHeight: contentLineHeight,
+
+    letterSpacing: contentLetterSpacing,
   });
 
   /*
    * =====================================================
    * FILTER
-   *
-   * INPUTS:
-   *
-   * 0 = background us.mp4
-   * 1 = thumbnail
-   * 2 = title background PNG
-   * 3 = body PNG
-   * 4 = audio nếu có
    * =====================================================
    */
 
@@ -1106,7 +1051,7 @@ async function renderStoryCard({
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(imagePath)}`,
 
     /*
-     * 2 = title bg
+     * 2 = title background
      */
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedTitlePath)}`,
 
@@ -1196,6 +1141,8 @@ async function renderStoryCard({
       contentFontSize,
 
       contentLineHeight,
+
+      contentLetterSpacing,
 
       contentLines: bodyOverlay.lineCount,
 
@@ -1328,6 +1275,10 @@ router.post("/", async (req, res) => {
       }`,
     );
 
+    console.log(`║ Body font: ${BODY_FONT_SIZE}px`);
+
+    console.log(`║ Letter spacing: ${BODY_LETTER_SPACING}px`);
+
     console.log("╚══════════════════════════════════════════╝");
 
     /*
@@ -1414,6 +1365,7 @@ router.post("/", async (req, res) => {
 
     return res.json({
       success: true,
+
       url: uploadResult.url,
     });
   } catch (error) {
