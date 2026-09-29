@@ -43,15 +43,34 @@ const DEFAULT_SECONDS = 15;
  * BODY TYPOGRAPHY
  * =========================================================
  *
- * Giữ font 26px.
+ * Font tăng lại lên 27px.
  *
- * Letter spacing âm nhẹ giúp body trên VPS
- * không bị rộng hơn quá mức.
+ * Không giảm font để xử lý VPS nữa.
+ * Thay vào đó text sẽ wrap sớm hơn ở mép phải.
  */
 
-const BODY_FONT_SIZE = 26;
+const BODY_FONT_SIZE = 27;
+
 const BODY_LINE_HEIGHT = 36;
+
 const BODY_LETTER_SPACING = -0.35;
+
+/*
+ * Khoảng an toàn chỉ dùng khi tính wrap.
+ *
+ * Ví dụ PNG body rộng 632px
+ * thì text chỉ được phép wrap trong khoảng 608px.
+ *
+ * Nhờ vậy font trên VPS có rộng hơn local một chút
+ * cũng không bị crop bên phải.
+ */
+const BODY_WRAP_SAFETY = 24;
+
+/*
+ * Padding thật hai bên body.
+ */
+const BODY_PADDING_LEFT = 30;
+const BODY_PADDING_RIGHT = 30;
 
 /*
  * =========================================================
@@ -59,15 +78,39 @@ const BODY_LETTER_SPACING = -0.35;
  * =========================================================
  */
 
-const TEMP_DIR = path.join(__dirname, "..", "temp");
+const TEMP_DIR = path.join(
+  __dirname,
+  "..",
+  "temp",
+);
 
-const BG_VIDEO_FILE = path.join(__dirname, "..", "us.mp4");
+const BG_VIDEO_FILE = path.join(
+  __dirname,
+  "..",
+  "us.mp4",
+);
 
-const FALLBACK_AUDIO_DIR = path.join(__dirname, "..", "demo", "audio");
+const FALLBACK_AUDIO_DIR = path.join(
+  __dirname,
+  "..",
+  "demo",
+  "audio",
+);
 
-const FONT_FILE = path.join(__dirname, "..", "fonts", "Arial Bold.ttf");
+const FONT_FILE = path.join(
+  __dirname,
+  "..",
+  "fonts",
+  "Arial Bold.ttf",
+);
 
-const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
+const AUDIO_EXTENSIONS = [
+  ".mp3",
+  ".wav",
+  ".m4a",
+  ".aac",
+  ".ogg",
+];
 
 /*
  * =========================================================
@@ -91,9 +134,13 @@ const FIXED_AUDIO_LINKS = [
  */
 
 const COLOR_WHITE = "#f3f3f3";
+
 const COLOR_HIGHLIGHT = "#f0d400";
+
 const COLOR_TITLE_BG = "#e4c400";
+
 const COLOR_TITLE_TEXT = "#ffffff";
+
 const COLOR_CONTENT_BG = "#121416";
 
 /*
@@ -103,9 +150,12 @@ const COLOR_CONTENT_BG = "#121416";
  */
 
 if (!fs.existsSync(TEMP_DIR)) {
-  fs.mkdirSync(TEMP_DIR, {
-    recursive: true,
-  });
+  fs.mkdirSync(
+    TEMP_DIR,
+    {
+      recursive: true,
+    },
+  );
 }
 
 /*
@@ -115,7 +165,9 @@ if (!fs.existsSync(TEMP_DIR)) {
  */
 
 function generateJobId() {
-  return `story_card_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `story_card_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }
 
 function q(filePath) {
@@ -123,49 +175,114 @@ function q(filePath) {
 }
 
 function makeEven(value) {
-  return Math.max(2, Math.round(Number(value) / 2) * 2);
+  return Math.max(
+    2,
+    Math.round(
+      Number(value) / 2,
+    ) * 2,
+  );
 }
 
 function cleanupTempDir(tempDir) {
   try {
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, {
-        recursive: true,
-        force: true,
-      });
+    if (
+      fs.existsSync(
+        tempDir,
+      )
+    ) {
+      fs.rmSync(
+        tempDir,
+        {
+          recursive: true,
+          force: true,
+        },
+      );
 
-      console.log(`🗑️ Cleaned: ${tempDir}`);
+      console.log(
+        `🗑️ Cleaned: ${tempDir}`,
+      );
     }
   } catch (error) {
-    console.warn(`⚠️ Cleanup failed: ${error.message}`);
+    console.warn(
+      `⚠️ Cleanup failed: ${error.message}`,
+    );
   }
 }
 
 function normalizeText(text) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
+  return String(
+    text || "",
+  )
+    .replace(
+      /\s+/g,
+      " ",
+    )
     .trim();
 }
 
-function normalizeForTextfile(text) {
-  return String(text || "")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/\r?\n/g, " ")
+function normalizeForTextfile(
+  text,
+) {
+  return String(
+    text || "",
+  )
+    .replace(
+      /[“”]/g,
+      '"',
+    )
+    .replace(
+      /[‘’]/g,
+      "'",
+    )
+    .replace(
+      /\r?\n/g,
+      " ",
+    )
     .trim();
 }
 
-function escapeFilterPath(filePath) {
-  return filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+function escapeFilterPath(
+  filePath,
+) {
+  return filePath
+    .replace(
+      /\\/g,
+      "/",
+    )
+    .replace(
+      /:/g,
+      "\\:",
+    )
+    .replace(
+      /'/g,
+      "\\'",
+    );
 }
 
 function escapeXml(text) {
-  return String(text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+  return String(
+    text || "",
+  )
+    .replace(
+      /&/g,
+      "&amp;",
+    )
+    .replace(
+      /</g,
+      "&lt;",
+    )
+    .replace(
+      />/g,
+      "&gt;",
+    )
+    .replace(
+      /"/g,
+      "&quot;",
+    )
+    .replace(
+      /'/g,
+      "&apos;",
+    );
 }
 
 /*
@@ -174,61 +291,125 @@ function escapeXml(text) {
  * =========================================================
  */
 
-async function runCommand(cmd, label) {
-  console.log(`\n================ ${label} ================`);
+async function runCommand(
+  cmd,
+  label,
+) {
+  console.log(
+    `\n================ ${label} ================`,
+  );
 
   console.log(cmd);
 
-  console.log("==========================================\n");
+  console.log(
+    "==========================================\n",
+  );
 
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, {
-      shell: true,
-      windowsHide: true,
-    });
+  return new Promise(
+    (
+      resolve,
+      reject,
+    ) => {
+      const child =
+        spawn(
+          cmd,
+          {
+            shell: true,
+            windowsHide: true,
+          },
+        );
 
-    let stdout = "";
-    let stderr = "";
+      let stdout = "";
+      let stderr = "";
 
-    const appendTail = (current, chunk) => {
-      const next = current + chunk.toString();
+      const appendTail = (
+        current,
+        chunk,
+      ) => {
+        const next =
+          current +
+          chunk.toString();
 
-      return next.length > COMMAND_LOG_TAIL_CHARS
-        ? next.slice(next.length - COMMAND_LOG_TAIL_CHARS)
-        : next;
-    };
+        return next.length >
+          COMMAND_LOG_TAIL_CHARS
+          ? next.slice(
+              next.length -
+                COMMAND_LOG_TAIL_CHARS,
+            )
+          : next;
+      };
 
-    child.stdout.on("data", (chunk) => {
-      stdout = appendTail(stdout, chunk);
-    });
+      child.stdout.on(
+        "data",
+        (chunk) => {
+          stdout =
+            appendTail(
+              stdout,
+              chunk,
+            );
+        },
+      );
 
-    child.stderr.on("data", (chunk) => {
-      stderr = appendTail(stderr, chunk);
-    });
+      child.stderr.on(
+        "data",
+        (chunk) => {
+          stderr =
+            appendTail(
+              stderr,
+              chunk,
+            );
+        },
+      );
 
-    child.on("error", (error) => {
-      reject(new Error(`[${label}] ${error.message}`));
-    });
+      child.on(
+        "error",
+        (error) => {
+          reject(
+            new Error(
+              `[${label}] ${error.message}`,
+            ),
+          );
+        },
+      );
 
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve({
-          stdout,
-          stderr,
-        });
+      child.on(
+        "close",
+        (code) => {
+          if (
+            code === 0
+          ) {
+            resolve({
+              stdout,
+              stderr,
+            });
 
-        return;
-      }
+            return;
+          }
 
-      console.error(`[${label}] failed with exit code ${code}`);
+          console.error(
+            `[${label}] failed with exit code ${code}`,
+          );
 
-      if (stderr.trim()) {
-        console.error(stderr);
-      }
+          if (
+            stderr.trim()
+          ) {
+            console.error(
+              stderr,
+            );
+          }
 
-      reject(new Error(`[${label}] ${stderr || `exit code ${code}`}`));
-    });
-  });
+          reject(
+            new Error(
+              `[${label}] ${
+                stderr ||
+                `exit code ${code}`
+              }`,
+            ),
+          );
+        },
+      );
+    },
+  );
 }
 
 /*
@@ -237,23 +418,49 @@ async function runCommand(cmd, label) {
  * =========================================================
  */
 
-async function downloadFile(url, destPath) {
-  const response = await axios.get(url, {
-    responseType: "stream",
-    timeout: 30000,
-    family: 4,
-    maxRedirects: 5,
-    maxBodyLength: Infinity,
+async function downloadFile(
+  url,
+  destPath,
+) {
+  const response =
+    await axios.get(
+      url,
+      {
+        responseType:
+          "stream",
 
-    validateStatus: (status) => status >= 200 && status < 300,
+        timeout:
+          30000,
 
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    },
-  });
+        family:
+          4,
 
-  await pipelineAsync(response.data, fs.createWriteStream(destPath));
+        maxRedirects:
+          5,
+
+        maxBodyLength:
+          Infinity,
+
+        validateStatus:
+          (status) =>
+            status >=
+              200 &&
+            status <
+              300,
+
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      },
+    );
+
+  await pipelineAsync(
+    response.data,
+    fs.createWriteStream(
+      destPath,
+    ),
+  );
 
   return destPath;
 }
@@ -264,47 +471,112 @@ async function downloadFile(url, destPath) {
  * =========================================================
  */
 
-function getMediaFilesFromDir(dirPath, allowedExtensions) {
-  if (!fs.existsSync(dirPath)) {
+function getMediaFilesFromDir(
+  dirPath,
+  allowedExtensions,
+) {
+  if (
+    !fs.existsSync(
+      dirPath,
+    )
+  ) {
     return [];
   }
 
   return fs
-    .readdirSync(dirPath)
-    .filter((fileName) => {
-      const fullPath = path.join(dirPath, fileName);
+    .readdirSync(
+      dirPath,
+    )
+    .filter(
+      (fileName) => {
+        const fullPath =
+          path.join(
+            dirPath,
+            fileName,
+          );
 
-      const ext = path.extname(fileName).toLowerCase();
+        const ext =
+          path
+            .extname(
+              fileName,
+            )
+            .toLowerCase();
 
-      return fs.statSync(fullPath).isFile() && allowedExtensions.includes(ext);
-    })
-    .map((fileName) => path.join(dirPath, fileName));
+        return (
+          fs
+            .statSync(
+              fullPath,
+            )
+            .isFile() &&
+          allowedExtensions.includes(
+            ext,
+          )
+        );
+      },
+    )
+    .map(
+      (fileName) =>
+        path.join(
+          dirPath,
+          fileName,
+        ),
+    );
 }
 
-function pickRandomItem(items) {
-  if (!items.length) {
+function pickRandomItem(
+  items,
+) {
+  if (
+    !items.length
+  ) {
     return null;
   }
 
-  return items[Math.floor(Math.random() * items.length)];
+  return items[
+    Math.floor(
+      Math.random() *
+        items.length,
+    )
+  ];
 }
 
 function isHttpUrl(value) {
-  return /^https?:\/\//i.test(String(value || "").trim());
+  return /^https?:\/\//i.test(
+    String(
+      value || "",
+    ).trim(),
+  );
 }
 
 function pickRandomAudioLink() {
-  const links = FIXED_AUDIO_LINKS.map((link) =>
-    String(link || "").trim(),
-  ).filter(isHttpUrl);
+  const links =
+    FIXED_AUDIO_LINKS
+      .map(
+        (link) =>
+          String(
+            link ||
+              "",
+          ).trim(),
+      )
+      .filter(
+        isHttpUrl,
+      );
 
-  return pickRandomItem(links);
+  return pickRandomItem(
+    links,
+  );
 }
 
 function pickRandomFallbackAudio() {
-  const files = getMediaFilesFromDir(FALLBACK_AUDIO_DIR, AUDIO_EXTENSIONS);
+  const files =
+    getMediaFilesFromDir(
+      FALLBACK_AUDIO_DIR,
+      AUDIO_EXTENSIONS,
+    );
 
-  return pickRandomItem(files);
+  return pickRandomItem(
+    files,
+  );
 }
 
 /*
@@ -313,20 +585,38 @@ function pickRandomFallbackAudio() {
  * =========================================================
  */
 
-function clampStoryContentByWords(text, maxWords = 120) {
-  const clean = normalizeText(text);
+function clampStoryContentByWords(
+  text,
+  maxWords = 120,
+) {
+  const clean =
+    normalizeText(
+      text,
+    );
 
   if (!clean) {
     return "";
   }
 
-  const words = clean.split(/\s+/).filter(Boolean);
+  const words =
+    clean
+      .split(/\s+/)
+      .filter(Boolean);
 
-  if (words.length <= maxWords) {
+  if (
+    words.length <=
+    maxWords
+  ) {
     return clean;
   }
 
-  return words.slice(0, maxWords).join(" ").trim();
+  return words
+    .slice(
+      0,
+      maxWords,
+    )
+    .join(" ")
+    .trim();
 }
 
 /*
@@ -335,60 +625,115 @@ function clampStoryContentByWords(text, maxWords = 120) {
  * =========================================================
  */
 
-function splitSentences(text) {
-  const clean = normalizeText(text);
+function splitSentences(
+  text,
+) {
+  const clean =
+    normalizeText(
+      text,
+    );
 
   if (!clean) {
     return [];
   }
 
-  const matches = clean.match(/[^.]+\.?/g) || [];
+  const matches =
+    clean.match(
+      /[^.]+\.?/g,
+    ) || [];
 
-  return matches.map((item) => item.trim()).filter(Boolean);
+  return matches
+    .map(
+      (item) =>
+        item.trim(),
+    )
+    .filter(Boolean);
 }
 
 /*
  * =========================================================
  * WIDTH ESTIMATION
- *
- * BODY_LETTER_SPACING phải được tính ở đây
- * để wrap gần giống SVG render.
  * =========================================================
+ *
+ * Chỉ dùng để quyết định wrap.
+ *
+ * BODY_WRAP_SAFETY mới là lớp bảo vệ chính
+ * để tránh VPS crop phần cuối dòng.
  */
 
-function estimateTextWidthPx(text, fontSize, letterSpacing = 0) {
-  const value = String(text || "");
+function estimateTextWidthPx(
+  text,
+  fontSize,
+  letterSpacing = 0,
+) {
+  const value =
+    String(
+      text || "",
+    );
 
   let width = 0;
 
-  for (const char of value) {
-    if (char === " ") {
-      width += fontSize * 0.33;
-    } else if (/[ilI1.,'":;!|]/.test(char)) {
-      width += fontSize * 0.29;
-    } else if (/[mwMW@%&#]/.test(char)) {
-      width += fontSize * 0.92;
-    } else if (/[A-Z]/.test(char)) {
-      width += fontSize * 0.67;
-    } else if (/[0-9]/.test(char)) {
-      width += fontSize * 0.57;
+  for (
+    const char of value
+  ) {
+    if (
+      char === " "
+    ) {
+      width +=
+        fontSize *
+        0.33;
+    } else if (
+      /[ilI1.,'":;!|]/.test(
+        char,
+      )
+    ) {
+      width +=
+        fontSize *
+        0.29;
+    } else if (
+      /[mwMW@%&#]/.test(
+        char,
+      )
+    ) {
+      width +=
+        fontSize *
+        0.92;
+    } else if (
+      /[A-Z]/.test(
+        char,
+      )
+    ) {
+      width +=
+        fontSize *
+        0.67;
+    } else if (
+      /[0-9]/.test(
+        char,
+      )
+    ) {
+      width +=
+        fontSize *
+        0.57;
     } else {
-      width += fontSize * 0.54;
+      width +=
+        fontSize *
+        0.54;
     }
   }
 
-  /*
-   * letter-spacing áp dụng giữa các glyph.
-   *
-   * Ví dụ 20 ký tự có khoảng
-   * 19 khoảng letter-spacing.
-   */
-  const spacingCount = Math.max(0, value.length - 1);
+  const spacingCount =
+    Math.max(
+      0,
+      value.length -
+        1,
+    );
 
-  width += spacingCount * letterSpacing;
+  width +=
+    spacingCount *
+    letterSpacing;
 
   /*
-   * Safety margin.
+   * Safety estimate cũ vẫn giữ.
    */
   return width * 1.03;
 }
@@ -399,105 +744,184 @@ function estimateTextWidthPx(text, fontSize, letterSpacing = 0) {
  * =========================================================
  */
 
-function buildTitleLines({ title, maxWidth, fontSize }) {
-  const clean = normalizeText(title);
+function buildTitleLines({
+  title,
+  maxWidth,
+  fontSize,
+}) {
+  const clean =
+    normalizeText(
+      title,
+    );
 
   if (!clean) {
     return [];
   }
 
-  const words = clean.split(/\s+/).filter(Boolean);
+  const words =
+    clean
+      .split(/\s+/)
+      .filter(Boolean);
 
   const lines = [];
 
-  let currentLine = "";
+  let currentLine =
+    "";
+
   let index = 0;
 
-  while (index < words.length && lines.length < 2) {
-    const word = words[index];
+  while (
+    index <
+      words.length &&
+    lines.length < 2
+  ) {
+    const word =
+      words[index];
 
-    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    const candidate =
+      currentLine
+        ? `${currentLine} ${word}`
+        : word;
 
-    /*
-     * Title không dùng
-     * BODY_LETTER_SPACING.
-     */
-    if (estimateTextWidthPx(candidate, fontSize, 0) <= maxWidth) {
-      currentLine = candidate;
+    if (
+      estimateTextWidthPx(
+        candidate,
+        fontSize,
+        0,
+      ) <= maxWidth
+    ) {
+      currentLine =
+        candidate;
 
       index += 1;
 
       continue;
     }
 
-    if (currentLine) {
-      lines.push(currentLine);
+    if (
+      currentLine
+    ) {
+      lines.push(
+        currentLine,
+      );
 
-      currentLine = "";
+      currentLine =
+        "";
 
       continue;
     }
 
     /*
-     * Safety nếu một word
-     * rộng hơn cả box.
+     * Safety:
+     * 1 word quá dài.
      */
-    let safeWord = "";
+    let safeWord =
+      "";
 
-    for (const char of word) {
-      const next = safeWord + char;
+    for (
+      const char of word
+    ) {
+      const next =
+        safeWord +
+        char;
 
-      if (estimateTextWidthPx(`${next}...`, fontSize, 0) > maxWidth) {
+      if (
+        estimateTextWidthPx(
+          `${next}...`,
+          fontSize,
+          0,
+        ) >
+        maxWidth
+      ) {
         break;
       }
 
-      safeWord = next;
+      safeWord =
+        next;
     }
 
-    lines.push(`${safeWord}...`);
+    lines.push(
+      `${safeWord}...`,
+    );
 
     index += 1;
   }
 
-  if (currentLine && lines.length < 2) {
-    lines.push(currentLine);
+  if (
+    currentLine &&
+    lines.length < 2
+  ) {
+    lines.push(
+      currentLine,
+    );
   }
 
-  const hasRemainingWords = index < words.length;
+  const hasRemainingWords =
+    index <
+    words.length;
 
-  if (hasRemainingWords && lines.length > 0) {
-    const lastIndex = lines.length - 1;
+  if (
+    hasRemainingWords &&
+    lines.length > 0
+  ) {
+    const lastIndex =
+      lines.length - 1;
 
-    let lastLine = lines[lastIndex];
+    let lastLine =
+      lines[
+        lastIndex
+      ];
 
     while (
       lastLine &&
-      estimateTextWidthPx(`${lastLine}...`, fontSize, 0) > maxWidth
+      estimateTextWidthPx(
+        `${lastLine}...`,
+        fontSize,
+        0,
+      ) >
+        maxWidth
     ) {
-      const parts = lastLine.split(/\s+/).filter(Boolean);
+      const parts =
+        lastLine
+          .split(/\s+/)
+          .filter(Boolean);
 
       parts.pop();
 
-      lastLine = parts.join(" ");
+      lastLine =
+        parts.join(
+          " ",
+        );
     }
 
-    lines[lastIndex] = lastLine
-      ? `${lastLine.replace(/[ .,!?:;"'”’)-]+$/, "").trim()}...`
-      : "...";
+    lines[
+      lastIndex
+    ] =
+      lastLine
+        ? `${lastLine
+            .replace(
+              /[ .,!?:;"'”’)-]+$/,
+              "",
+            )
+            .trim()}...`
+        : "...";
   }
 
-  return lines.slice(0, 2);
+  return lines.slice(
+    0,
+    2,
+  );
 }
 
 /*
  * =========================================================
  * BODY LAYOUT
- *
- * Paragraph liền mạch.
- *
- * Sentence đổi màu nhưng không xuống dòng
- * chỉ vì gặp dấu ".".
  * =========================================================
+ *
+ * Paragraph liên tục.
+ *
+ * Mỗi câu đổi màu nhưng không bắt buộc
+ * xuống dòng sau dấu ".".
  */
 
 function buildContinuousBodyLines({
@@ -506,71 +930,129 @@ function buildContinuousBodyLines({
   fontSize,
   letterSpacing,
 }) {
-  const sentences = splitSentences(content);
+  const sentences =
+    splitSentences(
+      content,
+    );
 
   const lines = [];
 
-  let currentLine = [];
-  let currentWidth = 0;
+  let currentLine =
+    [];
+
+  let currentWidth =
+    0;
 
   function pushLine() {
-    if (currentLine.length === 0) {
+    if (
+      currentLine.length ===
+      0
+    ) {
       return;
     }
 
-    lines.push(currentLine);
+    lines.push(
+      currentLine,
+    );
 
-    currentLine = [];
+    currentLine =
+      [];
 
-    currentWidth = 0;
+    currentWidth =
+      0;
   }
 
   for (
     let sentenceIndex = 0;
-    sentenceIndex < sentences.length;
+    sentenceIndex <
+    sentences.length;
     sentenceIndex += 1
   ) {
-    const sentence = sentences[sentenceIndex];
+    const sentence =
+      sentences[
+        sentenceIndex
+      ];
 
-    const color = sentenceIndex % 2 === 0 ? COLOR_WHITE : COLOR_HIGHLIGHT;
+    const color =
+      sentenceIndex %
+          2 ===
+        0
+        ? COLOR_WHITE
+        : COLOR_HIGHLIGHT;
 
-    const words = sentence.split(/\s+/).filter(Boolean);
+    const words =
+      sentence
+        .split(/\s+/)
+        .filter(Boolean);
 
-    for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
-      const word = words[wordIndex];
+    for (
+      let wordIndex = 0;
+      wordIndex <
+      words.length;
+      wordIndex += 1
+    ) {
+      const word =
+        words[
+          wordIndex
+        ];
 
       /*
-       * Nếu line đã có chữ:
+       * Nếu line đã có chữ,
        * thêm đúng 1 dấu cách.
        */
-      let text = currentLine.length > 0 ? ` ${word}` : word;
+      let text =
+        currentLine.length >
+        0
+          ? ` ${word}`
+          : word;
 
-      let width = estimateTextWidthPx(text, fontSize, letterSpacing);
+      let width =
+        estimateTextWidthPx(
+          text,
+          fontSize,
+          letterSpacing,
+        );
 
       /*
-       * Nếu word tiếp theo vượt width:
-       * xuống dòng.
+       * maxWidth ở đây đã được giảm
+       * bởi BODY_WRAP_SAFETY.
+       *
+       * Vì vậy wrap xảy ra sớm hơn,
+       * không sát cạnh PNG nữa.
        */
-      if (currentLine.length > 0 && currentWidth + width > maxWidth) {
+      if (
+        currentLine.length >
+          0 &&
+        currentWidth +
+          width >
+          maxWidth
+      ) {
         pushLine();
 
-        /*
-         * Đầu dòng mới không có
-         * leading space.
-         */
-        text = word;
+        text =
+          word;
 
-        width = estimateTextWidthPx(text, fontSize, letterSpacing);
+        width =
+          estimateTextWidthPx(
+            text,
+            fontSize,
+            letterSpacing,
+          );
       }
 
-      const lastSegment = currentLine[currentLine.length - 1];
+      const lastSegment =
+        currentLine[
+          currentLine.length -
+            1
+        ];
 
-      /*
-       * Cùng màu thì nối
-       * trong cùng tspan.
-       */
-      if (lastSegment && lastSegment.color === color) {
-        lastSegment.text += text;
+      if (
+        lastSegment &&
+        lastSegment.color ===
+          color
+      ) {
+        lastSegment.text +=
+          text;
       } else {
         currentLine.push({
           text,
@@ -579,7 +1061,8 @@ function buildContinuousBodyLines({
         });
       }
 
-      currentWidth += width;
+      currentWidth +=
+        width;
     }
   }
 
@@ -601,9 +1084,21 @@ async function createRoundedTitleBox({
   radius = 18,
   color = COLOR_TITLE_BG,
 }) {
-  const safeWidth = Math.max(2, Math.round(width));
+  const safeWidth =
+    Math.max(
+      2,
+      Math.round(
+        width,
+      ),
+    );
 
-  const safeHeight = Math.max(2, Math.round(height));
+  const safeHeight =
+    Math.max(
+      2,
+      Math.round(
+        height,
+      ),
+    );
 
   const svg = `
     <svg
@@ -624,10 +1119,24 @@ async function createRoundedTitleBox({
     </svg>
   `;
 
-  await sharp(Buffer.from(svg)).png().toFile(outputPath);
+  await sharp(
+    Buffer.from(
+      svg,
+    ),
+  )
+    .png()
+    .toFile(
+      outputPath,
+    );
 
-  if (!fs.existsSync(outputPath)) {
-    throw new Error("Failed to create rounded title box");
+  if (
+    !fs.existsSync(
+      outputPath,
+    )
+  ) {
+    throw new Error(
+      "Failed to create rounded title box",
+    );
   }
 
   return outputPath;
@@ -636,66 +1145,120 @@ async function createRoundedTitleBox({
 /*
  * =========================================================
  * BODY PNG
- *
- * letter-spacing được set trực tiếp
- * trong SVG.
  * =========================================================
+ *
+ * width:
+ *   chiều rộng thật của PNG.
+ *
+ * wrapWidth:
+ *   chiều rộng nhỏ hơn dùng riêng cho wrap.
+ *
+ * Đây là fix quan trọng nhất cho VPS.
  */
 
 async function createBodyOverlay({
   outputPath,
   content,
   width,
-  fontSize = BODY_FONT_SIZE,
-  lineHeight = BODY_LINE_HEIGHT,
-  letterSpacing = BODY_LETTER_SPACING,
+
+  wrapWidth = width,
+
+  fontSize =
+    BODY_FONT_SIZE,
+
+  lineHeight =
+    BODY_LINE_HEIGHT,
+
+  letterSpacing =
+    BODY_LETTER_SPACING,
 }) {
-  const lines = buildContinuousBodyLines({
-    content,
-    maxWidth: width,
-    fontSize,
-    letterSpacing,
-  });
+  /*
+   * QUAN TRỌNG:
+   *
+   * maxWidth sử dụng wrapWidth,
+   * KHÔNG dùng width thật của PNG.
+   */
+  const lines =
+    buildContinuousBodyLines({
+      content,
 
-  const paddingTop = 5;
-  const paddingBottom = 10;
+      maxWidth:
+        wrapWidth,
 
-  const height = Math.max(
-    lineHeight,
-    paddingTop + lines.length * lineHeight + paddingBottom,
-  );
+      fontSize,
 
-  const svgLines = lines
-    .map((segments, lineIndex) => {
-      const y = paddingTop + fontSize + lineIndex * lineHeight;
+      letterSpacing,
+    });
 
-      const tspans = segments
-        .map((segment) => {
+  const paddingTop =
+    5;
+
+  const paddingBottom =
+    10;
+
+  const height =
+    Math.max(
+      lineHeight,
+
+      paddingTop +
+        lines.length *
+          lineHeight +
+        paddingBottom,
+    );
+
+  const svgLines =
+    lines
+      .map(
+        (
+          segments,
+          lineIndex,
+        ) => {
+          const y =
+            paddingTop +
+            fontSize +
+            lineIndex *
+              lineHeight;
+
+          const tspans =
+            segments
+              .map(
+                (
+                  segment,
+                ) => {
+                  return (
+                    `<tspan ` +
+                    `fill="${segment.color}" ` +
+                    `xml:space="preserve">` +
+                    `${escapeXml(
+                      segment.text,
+                    )}` +
+                    `</tspan>`
+                  );
+                },
+              )
+              .join("");
+
           return (
-            `<tspan ` +
-            `fill="${segment.color}" ` +
+            `<text ` +
+            `x="0" ` +
+            `y="${y}" ` +
+            `font-family="Arial" ` +
+            `font-size="${fontSize}" ` +
+            `font-weight="700" ` +
+            `letter-spacing="${letterSpacing}px" ` +
             `xml:space="preserve">` +
-            `${escapeXml(segment.text)}` +
-            `</tspan>`
+            `${tspans}` +
+            `</text>`
           );
-        })
-        .join("");
+        },
+      )
+      .join("");
 
-      return (
-        `<text ` +
-        `x="0" ` +
-        `y="${y}" ` +
-        `font-family="Arial" ` +
-        `font-size="${fontSize}" ` +
-        `font-weight="700" ` +
-        `letter-spacing="${letterSpacing}px" ` +
-        `xml:space="preserve">` +
-        `${tspans}` +
-        `</text>`
-      );
-    })
-    .join("");
-
+  /*
+   * PNG vẫn dùng WIDTH THẬT.
+   *
+   * Text chỉ wrap sớm hơn bên trong.
+   */
   const svg = `
     <svg
       width="${width}"
@@ -707,17 +1270,37 @@ async function createBodyOverlay({
     </svg>
   `;
 
-  await sharp(Buffer.from(svg)).png().toFile(outputPath);
+  await sharp(
+    Buffer.from(
+      svg,
+    ),
+  )
+    .png()
+    .toFile(
+      outputPath,
+    );
 
-  if (!fs.existsSync(outputPath)) {
-    throw new Error("Failed to create body overlay");
+  if (
+    !fs.existsSync(
+      outputPath,
+    )
+  ) {
+    throw new Error(
+      "Failed to create body overlay",
+    );
   }
 
   return {
     outputPath,
+
     width,
+
+    wrapWidth,
+
     height,
-    lineCount: lines.length,
+
+    lineCount:
+      lines.length,
   };
 }
 
@@ -727,67 +1310,123 @@ async function createBodyOverlay({
  * =========================================================
  */
 
-function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
+function buildTitleFilters({
+  title,
+  tempDir,
+  cardX,
+  cardW,
+  imageBottomY,
+}) {
   const filters = [];
 
-  const titleFontSize = 28;
+  const titleFontSize =
+    28;
 
-  const titleLineHeight = 34;
+  const titleLineHeight =
+    34;
 
-  const titlePaddingY = 10;
+  const titlePaddingY =
+    10;
 
-  const titleBoxX = cardX + 4;
+  const titleBoxX =
+    cardX + 4;
 
-  const titleBoxW = cardW - 8;
+  const titleBoxW =
+    cardW - 8;
 
-  const titleTextPaddingX = 18;
+  const titleTextPaddingX =
+    18;
 
-  const titleTextMaxWidth = titleBoxW - titleTextPaddingX * 2;
+  const titleTextMaxWidth =
+    titleBoxW -
+    titleTextPaddingX *
+      2;
 
-  const titleLines = buildTitleLines({
-    title,
-    maxWidth: titleTextMaxWidth,
-    fontSize: titleFontSize,
-  });
+  const titleLines =
+    buildTitleLines({
+      title,
 
-  const titleBoxH = titleLines.length * titleLineHeight + titlePaddingY * 2;
+      maxWidth:
+        titleTextMaxWidth,
+
+      fontSize:
+        titleFontSize,
+    });
+
+  const titleBoxH =
+    titleLines.length *
+      titleLineHeight +
+    titlePaddingY * 2;
 
   /*
-   * Title đè thumbnail 2px.
+   * Title chỉ đè thumbnail 2px.
    */
-  const titleBoxY = imageBottomY - 2;
+  const titleBoxY =
+    imageBottomY - 2;
 
-  const fontPath = escapeFilterPath(FONT_FILE);
-
-  titleLines.forEach((line, index) => {
-    const txtPath = path.join(tempDir, `title_${index}.txt`);
-
-    fs.writeFileSync(txtPath, normalizeForTextfile(line), "utf8");
-
-    const textPath = escapeFilterPath(txtPath);
-
-    const y = titleBoxY + titlePaddingY + index * titleLineHeight;
-
-    filters.push(
-      `drawtext=` +
-        `fontfile='${fontPath}':` +
-        `textfile='${textPath}':` +
-        `reload=0:` +
-        `fontcolor=${COLOR_TITLE_TEXT}:` +
-        `fontsize=${titleFontSize}:` +
-        `x=${titleBoxX}+(${titleBoxW}-text_w)/2:` +
-        `y=${y}:` +
-        `bordercolor=black@0.35:` +
-        `borderw=1`,
+  const fontPath =
+    escapeFilterPath(
+      FONT_FILE,
     );
-  });
+
+  titleLines.forEach(
+    (
+      line,
+      index,
+    ) => {
+      const txtPath =
+        path.join(
+          tempDir,
+          `title_${index}.txt`,
+        );
+
+      fs.writeFileSync(
+        txtPath,
+
+        normalizeForTextfile(
+          line,
+        ),
+
+        "utf8",
+      );
+
+      const textPath =
+        escapeFilterPath(
+          txtPath,
+        );
+
+      const y =
+        titleBoxY +
+        titlePaddingY +
+        index *
+          titleLineHeight;
+
+      filters.push(
+        `drawtext=` +
+          `fontfile='${fontPath}':` +
+          `textfile='${textPath}':` +
+          `reload=0:` +
+          `fontcolor=${COLOR_TITLE_TEXT}:` +
+          `fontsize=${titleFontSize}:` +
+          `x=${titleBoxX}+(${titleBoxW}-text_w)/2:` +
+          `y=${y}:` +
+          `bordercolor=black@0.35:` +
+          `borderw=1`,
+      );
+    },
+  );
 
   return {
     filters,
+
     titleLines,
+
     titleBoxX,
+
     titleBoxY,
+
     titleBoxW,
+
     titleBoxH,
   };
 }
@@ -807,9 +1446,11 @@ async function renderStoryCard({
   tempDir,
   seconds,
 }) {
-  const canvasW = DEFAULT_W;
+  const canvasW =
+    DEFAULT_W;
 
-  const canvasH = DEFAULT_H;
+  const canvasH =
+    DEFAULT_H;
 
   /*
    * =====================================================
@@ -817,13 +1458,18 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const outerMarginX = 14;
+  const outerMarginX =
+    14;
 
-  const cardX = outerMarginX;
+  const cardX =
+    outerMarginX;
 
-  const cardW = canvasW - outerMarginX * 2;
+  const cardW =
+    canvasW -
+    outerMarginX * 2;
 
-  const cardY = 30;
+  const cardY =
+    30;
 
   /*
    * =====================================================
@@ -831,11 +1477,18 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const imageW = cardW;
+  const imageW =
+    cardW;
 
-  const imageH = makeEven((imageW * 9) / 16);
+  const imageH =
+    makeEven(
+      (imageW * 9) /
+        16,
+    );
 
-  const imageBottomY = cardY + imageH;
+  const imageBottomY =
+    cardY +
+    imageH;
 
   /*
    * =====================================================
@@ -843,11 +1496,15 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const cardBottom = canvasH - 40;
+  const cardBottom =
+    canvasH - 40;
 
-  const contentPanelY = imageBottomY;
+  const contentPanelY =
+    imageBottomY;
 
-  const contentPanelH = cardBottom - contentPanelY;
+  const contentPanelH =
+    cardBottom -
+    contentPanelY;
 
   /*
    * =====================================================
@@ -855,7 +1512,11 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const clippedContent = clampStoryContentByWords(content, 120);
+  const clippedContent =
+    clampStoryContentByWords(
+      content,
+      120,
+    );
 
   /*
    * =====================================================
@@ -863,22 +1524,31 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const titleLayout = buildTitleFilters({
-    title,
-    tempDir,
-    cardX,
-    cardW,
-    imageBottomY,
-  });
+  const titleLayout =
+    buildTitleFilters({
+      title,
+
+      tempDir,
+
+      cardX,
+
+      cardW,
+
+      imageBottomY,
+    });
 
   const {
-    filters: titleTextFilters,
+    filters:
+      titleTextFilters,
 
     titleLines,
 
     titleBoxX,
+
     titleBoxY,
+
     titleBoxW,
+
     titleBoxH,
   } = titleLayout;
 
@@ -888,18 +1558,27 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const roundedTitlePath = path.join(tempDir, "rounded-title.png");
+  const roundedTitlePath =
+    path.join(
+      tempDir,
+      "rounded-title.png",
+    );
 
   await createRoundedTitleBox({
-    outputPath: roundedTitlePath,
+    outputPath:
+      roundedTitlePath,
 
-    width: titleBoxW,
+    width:
+      titleBoxW,
 
-    height: titleBoxH,
+    height:
+      titleBoxH,
 
-    radius: 18,
+    radius:
+      18,
 
-    color: COLOR_TITLE_BG,
+    color:
+      COLOR_TITLE_BG,
   });
 
   /*
@@ -908,21 +1587,64 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const contentFontSize = BODY_FONT_SIZE;
+  const contentFontSize =
+    BODY_FONT_SIZE;
 
-  const contentLineHeight = BODY_LINE_HEIGHT;
+  const contentLineHeight =
+    BODY_LINE_HEIGHT;
 
-  const contentLetterSpacing = BODY_LETTER_SPACING;
+  const contentLetterSpacing =
+    BODY_LETTER_SPACING;
 
-  const contentPaddingX = 24;
+  /*
+   * Padding thật tăng từ 24 -> 30.
+   */
+  const contentPaddingX =
+    BODY_PADDING_LEFT;
 
-  const contentRightPadding = 24;
+  const contentRightPadding =
+    BODY_PADDING_RIGHT;
 
-  const contentX = cardX + contentPaddingX;
+  const contentX =
+    cardX +
+    contentPaddingX;
 
-  const contentMaxWidth = cardW - contentPaddingX - contentRightPadding;
+  /*
+   * Đây là width thật của PNG body.
+   */
+  const contentMaxWidth =
+    cardW -
+    contentPaddingX -
+    contentRightPadding;
 
-  const contentY = titleBoxY + titleBoxH + 18;
+  /*
+   * =====================================================
+   * SAFE WRAP WIDTH
+   * =====================================================
+   *
+   * PNG vẫn rộng contentMaxWidth.
+   *
+   * Nhưng text chỉ wrap trong vùng nhỏ hơn 24px.
+   *
+   * Ví dụ:
+   *
+   * contentMaxWidth = 632
+   * contentWrapWidth = 608
+   *
+   * => có buffer bên phải.
+   */
+  const contentWrapWidth =
+    Math.max(
+      100,
+
+      contentMaxWidth -
+        BODY_WRAP_SAFETY,
+    );
+
+  const contentY =
+    titleBoxY +
+    titleBoxH +
+    18;
 
   /*
    * =====================================================
@@ -930,21 +1652,41 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  const bodyOverlayPath = path.join(tempDir, "body-overlay.png");
+  const bodyOverlayPath =
+    path.join(
+      tempDir,
+      "body-overlay.png",
+    );
 
-  const bodyOverlay = await createBodyOverlay({
-    outputPath: bodyOverlayPath,
+  const bodyOverlay =
+    await createBodyOverlay({
+      outputPath:
+        bodyOverlayPath,
 
-    content: clippedContent,
+      content:
+        clippedContent,
 
-    width: contentMaxWidth,
+      /*
+       * Width thật của PNG.
+       */
+      width:
+        contentMaxWidth,
 
-    fontSize: contentFontSize,
+      /*
+       * Width dùng riêng để wrap.
+       */
+      wrapWidth:
+        contentWrapWidth,
 
-    lineHeight: contentLineHeight,
+      fontSize:
+        contentFontSize,
 
-    letterSpacing: contentLetterSpacing,
-  });
+      lineHeight:
+        contentLineHeight,
+
+      letterSpacing:
+        contentLetterSpacing,
+    });
 
   /*
    * =====================================================
@@ -977,15 +1719,19 @@ async function renderStoryCard({
     /*
      * TITLE BG
      */
-    `[2:v]` + `format=rgba` + `[titlebg]`,
+    `[2:v]` +
+      `format=rgba` +
+      `[titlebg]`,
 
     /*
      * BODY PNG
      */
-    `[3:v]` + `format=rgba` + `[bodypng]`,
+    `[3:v]` +
+      `format=rgba` +
+      `[bodypng]`,
 
     /*
-     * CONTENT PANEL
+     * BLACK PANEL
      */
     `[bg]` +
       `drawbox=` +
@@ -1000,7 +1746,9 @@ async function renderStoryCard({
     /*
      * THUMBNAIL
      */
-    `[panel][thumb]` + `overlay=${cardX}:${cardY}:format=auto` + `[withthumb]`,
+    `[panel][thumb]` +
+      `overlay=${cardX}:${cardY}:format=auto` +
+      `[withthumb]`,
 
     /*
      * TITLE BACKGROUND
@@ -1020,16 +1768,30 @@ async function renderStoryCard({
      * TITLE TEXT
      */
     `[withbody]` +
-      `${titleTextFilters.join(",")},` +
+      `${titleTextFilters.join(
+        ",",
+      )},` +
       `fps=${OUTPUT_FPS},` +
       `format=yuv420p,` +
       `setpts=N/(${OUTPUT_FPS}*TB)` +
       `[v]`,
   ];
 
-  const filterFile = path.join(tempDir, "story_card_filter.txt");
+  const filterFile =
+    path.join(
+      tempDir,
+      "story_card_filter.txt",
+    );
 
-  fs.writeFileSync(filterFile, filterParts.join(";"), "utf8");
+  fs.writeFileSync(
+    filterFile,
+
+    filterParts.join(
+      ";",
+    ),
+
+    "utf8",
+  );
 
   /*
    * =====================================================
@@ -1043,22 +1805,30 @@ async function renderStoryCard({
     /*
      * 0 = background
      */
-    `-stream_loop -1 -i ${q(BG_VIDEO_FILE)}`,
+    `-stream_loop -1 -i ${q(
+      BG_VIDEO_FILE,
+    )}`,
 
     /*
      * 1 = thumbnail
      */
-    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(imagePath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(
+      imagePath,
+    )}`,
 
     /*
-     * 2 = title background
+     * 2 = title bg
      */
-    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedTitlePath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(
+      roundedTitlePath,
+    )}`,
 
     /*
      * 3 = body PNG
      */
-    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(bodyOverlayPath)}`,
+    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(
+      bodyOverlayPath,
+    )}`,
   ];
 
   /*
@@ -1067,15 +1837,25 @@ async function renderStoryCard({
    * =====================================================
    */
 
-  let audioMap = "-an";
+  let audioMap =
+    "-an";
 
-  if (audioPath) {
+  if (
+    audioPath
+  ) {
     /*
      * 4 = audio
      */
-    cmdParts.push(`-stream_loop -1 -i ${q(audioPath)}`);
+    cmdParts.push(
+      `-stream_loop -1 -i ${q(
+        audioPath,
+      )}`,
+    );
 
-    audioMap = `-map 4:a:0 ` + `-c:a aac ` + `-b:a 128k`;
+    audioMap =
+      `-map 4:a:0 ` +
+      `-c:a aac ` +
+      `-b:a 128k`;
   }
 
   /*
@@ -1085,13 +1865,17 @@ async function renderStoryCard({
    */
 
   cmdParts.push(
-    `-filter_complex_script ${q(filterFile)}`,
+    `-filter_complex_script ${q(
+      filterFile,
+    )}`,
 
     `-map "[v]"`,
 
     audioMap,
 
-    `-t ${Number(seconds).toFixed(3)}`,
+    `-t ${Number(
+      seconds,
+    ).toFixed(3)}`,
 
     `-c:v libx264`,
 
@@ -1107,36 +1891,61 @@ async function renderStoryCard({
 
     `-movflags +faststart`,
 
-    q(outputPath),
+    q(
+      outputPath,
+    ),
   );
 
-  const cmd = cmdParts.join(" ");
+  const cmd =
+    cmdParts.join(
+      " ",
+    );
 
-  await runCommand(cmd, "render-story-card");
+  await runCommand(
+    cmd,
+    "render-story-card",
+  );
 
-  if (!fs.existsSync(outputPath)) {
-    throw new Error("renderStoryCard failed");
+  if (
+    !fs.existsSync(
+      outputPath,
+    )
+  ) {
+    throw new Error(
+      "renderStoryCard failed",
+    );
   }
 
   return {
     outputPath,
 
     metadata: {
-      resolution: `${canvasW}x${canvasH}`,
+      resolution:
+        `${canvasW}x${canvasH}`,
 
-      thumbnailRatio: "16:9",
+      thumbnailRatio:
+        "16:9",
 
-      titleLines: titleLines.length,
+      titleLines:
+        titleLines.length,
 
-      titleMaxLines: 2,
+      titleMaxLines:
+        2,
 
-      titleRounded: true,
+      titleRounded:
+        true,
 
-      titleOverlapPx: 2,
+      titleOverlapPx:
+        2,
 
-      contentWords: clippedContent.split(/\s+/).filter(Boolean).length,
+      contentWords:
+        clippedContent
+          .split(/\s+/)
+          .filter(Boolean)
+          .length,
 
-      contentChars: clippedContent.length,
+      contentChars:
+        clippedContent.length,
 
       contentFontSize,
 
@@ -1144,19 +1953,40 @@ async function renderStoryCard({
 
       contentLetterSpacing,
 
-      contentLines: bodyOverlay.lineCount,
+      contentPaddingLeft:
+        contentPaddingX,
 
-      contentAlign: "left",
+      contentPaddingRight:
+        contentRightPadding,
 
-      continuousParagraph: true,
+      contentWidth:
+        contentMaxWidth,
 
-      sentenceHighlight: true,
+      contentWrapWidth,
 
-      sentenceSpacing: "single-space",
+      contentWrapSafety:
+        BODY_WRAP_SAFETY,
 
-      bodyRenderMode: "svg-sharp",
+      contentLines:
+        bodyOverlay.lineCount,
 
-      content: clippedContent,
+      contentAlign:
+        "left",
+
+      continuousParagraph:
+        true,
+
+      sentenceHighlight:
+        true,
+
+      sentenceSpacing:
+        "single-space",
+
+      bodyRenderMode:
+        "svg-sharp",
+
+      content:
+        clippedContent,
     },
   };
 }
@@ -1167,218 +1997,386 @@ async function renderStoryCard({
  * =========================================================
  */
 
-router.post("/", async (req, res) => {
-  const { image, title, content } = req.body || {};
+router.post(
+  "/",
+  async (
+    req,
+    res,
+  ) => {
+    const {
+      image,
+      title,
+      content,
+    } =
+      req.body || {};
 
-  /*
-   * =====================================================
-   * VALIDATE IMAGE
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * VALIDATE IMAGE
+     * =====================================================
+     */
 
-  if (!image || typeof image !== "string" || !image.trim()) {
-    return res.status(400).json({
-      success: false,
+    if (
+      !image ||
+      typeof image !==
+        "string" ||
+      !image.trim()
+    ) {
+      return res
+        .status(400)
+        .json({
+          success:
+            false,
 
-      error: "image is required",
-    });
-  }
+          error:
+            "image is required",
+        });
+    }
 
-  /*
-   * =====================================================
-   * VALIDATE TITLE
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * VALIDATE TITLE
+     * =====================================================
+     */
 
-  if (!title || typeof title !== "string" || !title.trim()) {
-    return res.status(400).json({
-      success: false,
+    if (
+      !title ||
+      typeof title !==
+        "string" ||
+      !title.trim()
+    ) {
+      return res
+        .status(400)
+        .json({
+          success:
+            false,
 
-      error: "title is required",
-    });
-  }
+          error:
+            "title is required",
+        });
+    }
 
-  /*
-   * =====================================================
-   * VALIDATE CONTENT
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * VALIDATE CONTENT
+     * =====================================================
+     */
 
-  if (!content || typeof content !== "string" || !content.trim()) {
-    return res.status(400).json({
-      success: false,
+    if (
+      !content ||
+      typeof content !==
+        "string" ||
+      !content.trim()
+    ) {
+      return res
+        .status(400)
+        .json({
+          success:
+            false,
 
-      error: "content is required",
-    });
-  }
+          error:
+            "content is required",
+        });
+    }
 
-  /*
-   * =====================================================
-   * CHECK BACKGROUND
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * CHECK BACKGROUND
+     * =====================================================
+     */
 
-  if (!fs.existsSync(BG_VIDEO_FILE)) {
-    return res.status(500).json({
-      success: false,
+    if (
+      !fs.existsSync(
+        BG_VIDEO_FILE,
+      )
+    ) {
+      return res
+        .status(500)
+        .json({
+          success:
+            false,
 
-      error: "Missing background video: us.mp4",
-    });
-  }
+          error:
+            "Missing background video: us.mp4",
+        });
+    }
 
-  /*
-   * =====================================================
-   * CHECK FONT
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * CHECK FONT
+     * =====================================================
+     */
 
-  if (!fs.existsSync(FONT_FILE)) {
-    return res.status(500).json({
-      success: false,
+    if (
+      !fs.existsSync(
+        FONT_FILE,
+      )
+    ) {
+      return res
+        .status(500)
+        .json({
+          success:
+            false,
 
-      error: "Missing font: Arial Bold.ttf",
-    });
-  }
+          error:
+            "Missing font: Arial Bold.ttf",
+        });
+    }
 
-  /*
-   * =====================================================
-   * JOB
-   * =====================================================
-   */
+    /*
+     * =====================================================
+     * JOB
+     * =====================================================
+     */
 
-  const jobId = generateJobId();
+    const jobId =
+      generateJobId();
 
-  const tempDir = path.join(TEMP_DIR, jobId);
+    const tempDir =
+      path.join(
+        TEMP_DIR,
+        jobId,
+      );
 
-  fs.mkdirSync(tempDir, {
-    recursive: true,
-  });
-
-  const imagePath = path.join(tempDir, "thumbnail.jpg");
-
-  const finalPath = path.join(tempDir, "final.mp4");
-
-  try {
-    console.log("\n╔══════════════════════════════════════════╗");
-
-    console.log("║ 🎬 STORY CARD");
-
-    console.log(`║ Job: ${jobId}`);
-
-    console.log(`║ Image: ${image.substring(0, 70)}`);
-
-    console.log(`║ Title: ${title.substring(0, 100)}`);
-
-    console.log(
-      `║ Content words: ${
-        normalizeText(content).split(/\s+/).filter(Boolean).length
-      }`,
+    fs.mkdirSync(
+      tempDir,
+      {
+        recursive:
+          true,
+      },
     );
 
-    console.log(`║ Body font: ${BODY_FONT_SIZE}px`);
+    const imagePath =
+      path.join(
+        tempDir,
+        "thumbnail.jpg",
+      );
 
-    console.log(`║ Letter spacing: ${BODY_LETTER_SPACING}px`);
+    const finalPath =
+      path.join(
+        tempDir,
+        "final.mp4",
+      );
 
-    console.log("╚══════════════════════════════════════════╝");
+    try {
+      console.log(
+        "\n╔══════════════════════════════════════════╗",
+      );
 
-    /*
-     * =================================================
-     * DOWNLOAD IMAGE
-     * =================================================
-     */
+      console.log(
+        "║ 🎬 STORY CARD",
+      );
 
-    await downloadFile(image.trim(), imagePath);
+      console.log(
+        `║ Job: ${jobId}`,
+      );
 
-    /*
-     * =================================================
-     * AUDIO
-     * =================================================
-     */
+      console.log(
+        `║ Image: ${image.substring(
+          0,
+          70,
+        )}`,
+      );
 
-    const audioUrl = pickRandomAudioLink();
+      console.log(
+        `║ Title: ${title.substring(
+          0,
+          100,
+        )}`,
+      );
 
-    let audioPath = null;
+      console.log(
+        `║ Content words: ${
+          normalizeText(
+            content,
+          )
+            .split(/\s+/)
+            .filter(Boolean)
+            .length
+        }`,
+      );
 
-    let audioSource = null;
+      console.log(
+        `║ Body font: ${BODY_FONT_SIZE}px`,
+      );
 
-    if (audioUrl) {
-      audioPath = path.join(tempDir, "audio-source");
+      console.log(
+        `║ Letter spacing: ${BODY_LETTER_SPACING}px`,
+      );
 
-      await downloadFile(audioUrl, audioPath);
+      console.log(
+        `║ Body padding: L${BODY_PADDING_LEFT}px / R${BODY_PADDING_RIGHT}px`,
+      );
 
-      audioSource = audioUrl;
+      console.log(
+        `║ Wrap safety: ${BODY_WRAP_SAFETY}px`,
+      );
 
-      console.log(`🎵 Audio URL: ${audioUrl}`);
-    } else {
-      audioPath = pickRandomFallbackAudio();
+      console.log(
+        "╚══════════════════════════════════════════╝",
+      );
 
-      audioSource = audioPath ? path.basename(audioPath) : null;
+      /*
+       * =================================================
+       * DOWNLOAD IMAGE
+       * =================================================
+       */
 
-      if (audioPath) {
-        console.log(`🎵 Fallback audio: ${path.basename(audioPath)}`);
+      await downloadFile(
+        image.trim(),
+        imagePath,
+      );
+
+      /*
+       * =================================================
+       * AUDIO
+       * =================================================
+       */
+
+      const audioUrl =
+        pickRandomAudioLink();
+
+      let audioPath =
+        null;
+
+      let audioSource =
+        null;
+
+      if (
+        audioUrl
+      ) {
+        audioPath =
+          path.join(
+            tempDir,
+            "audio-source",
+          );
+
+        await downloadFile(
+          audioUrl,
+          audioPath,
+        );
+
+        audioSource =
+          audioUrl;
+
+        console.log(
+          `🎵 Audio URL: ${audioUrl}`,
+        );
       } else {
-        console.log("🔇 No audio found — rendering silent video");
+        audioPath =
+          pickRandomFallbackAudio();
+
+        audioSource =
+          audioPath
+            ? path.basename(
+                audioPath,
+              )
+            : null;
+
+        if (
+          audioPath
+        ) {
+          console.log(
+            `🎵 Fallback audio: ${path.basename(
+              audioPath,
+            )}`,
+          );
+        } else {
+          console.log(
+            "🔇 No audio found — rendering silent video",
+          );
+        }
       }
+
+      /*
+       * =================================================
+       * RENDER
+       * =================================================
+       */
+
+      const renderResult =
+        await renderStoryCard({
+          imagePath,
+
+          audioPath,
+
+          title:
+            normalizeText(
+              title,
+            ),
+
+          content:
+            normalizeText(
+              content,
+            ),
+
+          outputPath:
+            finalPath,
+
+          tempDir,
+
+          seconds:
+            DEFAULT_SECONDS,
+        });
+
+      /*
+       * =================================================
+       * UPLOAD
+       * =================================================
+       */
+
+      const fileName =
+        `${jobId}.mp4`;
+
+      const uploadResult =
+        await uploadVideo(
+          finalPath,
+          fileName,
+        );
+
+      if (
+        !uploadResult?.url
+      ) {
+        throw new Error(
+          "Upload failed",
+        );
+      }
+
+      /*
+       * =================================================
+       * RESPONSE
+       * =================================================
+       */
+
+      return res.json({
+        success:
+          true,
+
+        url:
+          uploadResult.url,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Story card error:",
+        error,
+      );
+
+      return res
+        .status(500)
+        .json({
+          success:
+            false,
+
+          error:
+            error?.message ||
+            "Unknown error",
+        });
+    } finally {
+      cleanupTempDir(
+        tempDir,
+      );
     }
-
-    /*
-     * =================================================
-     * RENDER
-     * =================================================
-     */
-
-    const renderResult = await renderStoryCard({
-      imagePath,
-
-      audioPath,
-
-      title: normalizeText(title),
-
-      content: normalizeText(content),
-
-      outputPath: finalPath,
-
-      tempDir,
-
-      seconds: DEFAULT_SECONDS,
-    });
-
-    /*
-     * =================================================
-     * UPLOAD
-     * =================================================
-     */
-
-    const fileName = `${jobId}.mp4`;
-
-    const uploadResult = await uploadVideo(finalPath, fileName);
-
-    if (!uploadResult?.url) {
-      throw new Error("Upload failed");
-    }
-
-    /*
-     * =================================================
-     * RESPONSE
-     * =================================================
-     */
-
-    return res.json({
-      success: true,
-
-      url: uploadResult.url,
-    });
-  } catch (error) {
-    console.error("❌ Story card error:", error);
-
-    return res.status(500).json({
-      success: false,
-
-      error: error?.message || "Unknown error",
-    });
-  } finally {
-    cleanupTempDir(tempDir);
-  }
-});
+  },
+);
 
 module.exports = router;
