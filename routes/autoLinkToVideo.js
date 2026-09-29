@@ -64,13 +64,13 @@ const BODY_LETTER_SPACING = -0.35;
  * Nhờ vậy font trên VPS có rộng hơn local một chút
  * cũng không bị crop bên phải.
  */
-const BODY_WRAP_SAFETY = 24;
+const BODY_WRAP_SAFETY = 32;
 
 /*
  * Padding thật hai bên body.
  */
-const BODY_PADDING_LEFT = 30;
-const BODY_PADDING_RIGHT = 30;
+const BODY_PADDING_LEFT = 32;
+const BODY_PADDING_RIGHT = 32;
 
 /*
  * =========================================================
