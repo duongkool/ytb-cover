@@ -91,6 +91,7 @@ app.use("/api/simple-story", require("./routes/simpleStory"));
 app.use("/api/overlay-image", require("./routes/overlayImage"));
 app.use("/api/video-story-overlay", require("./routes/videoStoryOverlay"));
 app.use("/api/image-to-video", require("./routes/imageToVideo"));
+app.use("/api/link-to-video", require("./routes/autoLinkToVideo"));
 
 app.use("/api/simpleTextImageVideo", require("./routes/simpleTextImageVideo"));
 app.use("/api/upload-local", require("./routes/uploadLocal"));
