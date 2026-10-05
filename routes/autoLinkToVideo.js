@@ -937,23 +937,27 @@ async function renderStoryCard({
     titleBoxH,
   } = titleLayout;
 
+  const hasTitle = titleLines.length > 0;
+
   // =====================================================
   // TITLE BACKGROUND
   // =====================================================
 
   const roundedTitlePath = path.join(tempDir, "rounded-title.png");
 
-  await createRoundedTitleBox({
-    outputPath: roundedTitlePath,
+  if (hasTitle) {
+    await createRoundedTitleBox({
+      outputPath: roundedTitlePath,
 
-    width: titleBoxW,
+      width: titleBoxW,
 
-    height: titleBoxH,
+      height: titleBoxH,
 
-    radius: 18,
+      radius: 18,
 
-    color: COLOR_TITLE_BG,
-  });
+      color: COLOR_TITLE_BG,
+    });
+  }
 
   // =====================================================
   // BODY SETTINGS
@@ -1021,9 +1025,10 @@ async function renderStoryCard({
   );
 
   /*
-   * Body nằm ngay dưới title.
+   * Nếu có title, body nằm ngay dưới title.
+   * Nếu không có title, body bắt đầu ngay dưới thumbnail.
    */
-  const contentY = titleBoxY + titleBoxH + 18;
+  const contentY = hasTitle ? titleBoxY + titleBoxH + 18 : imageBottomY + 22;
 
   // =====================================================
   // CREATE BODY PNG
@@ -1058,10 +1063,17 @@ async function renderStoryCard({
   //
   // 0 = background
   // 1 = thumbnail
-  // 2 = title background
-  // 3 = body PNG
-  // 4 = audio nếu có
+  // Nếu có title:
+  //   2 = title background
+  //   3 = body PNG
+  //   4 = audio nếu có
+  //
+  // Nếu không có title:
+  //   2 = body PNG
+  //   3 = audio nếu có
   // =====================================================
+
+  const bodyInputIndex = hasTitle ? 3 : 2;
 
   const filterParts = [
     /*
@@ -1086,14 +1098,9 @@ async function renderStoryCard({
       `[thumb]`,
 
     /*
-     * TITLE BACKGROUND
-     */
-    `[2:v]` + `format=rgba` + `[titlebg]`,
-
-    /*
      * BODY PNG
      */
-    `[3:v]` + `format=rgba` + `[bodypng]`,
+    `[${bodyInputIndex}:v]` + `format=rgba` + `[bodypng]`,
 
     /*
      * BLACK PANEL
@@ -1113,30 +1120,55 @@ async function renderStoryCard({
      */
     `[panel][thumb]` + `overlay=${cardX}:${cardY}:format=auto` + `[withthumb]`,
 
-    /*
-     * TITLE BG
-     */
-    `[withthumb][titlebg]` +
-      `overlay=${titleBoxX}:${titleBoxY}:format=auto` +
-      `[withtitlebg]`,
-
-    /*
-     * BODY
-     */
-    `[withtitlebg][bodypng]` +
-      `overlay=${contentX}:${contentY}:format=auto` +
-      `[withbody]`,
-
-    /*
-     * TITLE TEXT
-     */
-    `[withbody]` +
-      `${titleTextFilters.join(",")},` +
-      `fps=${OUTPUT_FPS},` +
-      `format=yuv420p,` +
-      `setpts=N/(${OUTPUT_FPS}*TB)` +
-      `[v]`,
   ];
+
+  if (hasTitle) {
+    filterParts.push(
+      /*
+       * TITLE BACKGROUND
+       */
+      `[2:v]` + `format=rgba` + `[titlebg]`,
+
+      /*
+       * TITLE BG
+       */
+      `[withthumb][titlebg]` +
+        `overlay=${titleBoxX}:${titleBoxY}:format=auto` +
+        `[withtitlebg]`,
+
+      /*
+       * BODY
+       */
+      `[withtitlebg][bodypng]` +
+        `overlay=${contentX}:${contentY}:format=auto` +
+        `[withbody]`,
+
+      /*
+       * TITLE TEXT
+       */
+      `[withbody]` +
+        `${titleTextFilters.join(",")},` +
+        `fps=${OUTPUT_FPS},` +
+        `format=yuv420p,` +
+        `setpts=N/(${OUTPUT_FPS}*TB)` +
+        `[v]`,
+    );
+  } else {
+    filterParts.push(
+      /*
+       * BODY
+       */
+      `[withthumb][bodypng]` +
+        `overlay=${contentX}:${contentY}:format=auto` +
+        `[withbody]`,
+
+      `[withbody]` +
+        `fps=${OUTPUT_FPS},` +
+        `format=yuv420p,` +
+        `setpts=N/(${OUTPUT_FPS}*TB)` +
+        `[v]`,
+    );
+  }
 
   const filterFile = path.join(tempDir, "story_card_filter.txt");
 
@@ -1165,16 +1197,23 @@ async function renderStoryCard({
      */
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(imagePath)}`,
 
-    /*
-     * 2 = title background
-     */
-    `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedTitlePath)}`,
+  ];
 
+  if (hasTitle) {
+    cmdParts.push(
+      /*
+       * 2 = title background
+       */
+      `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(roundedTitlePath)}`,
+    );
+  }
+
+  cmdParts.push(
     /*
-     * 3 = body PNG
+     * 2/3 = body PNG
      */
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(bodyOverlayPath)}`,
-  ];
+  );
 
   // =====================================================
   // AUDIO
@@ -1184,11 +1223,14 @@ async function renderStoryCard({
 
   if (audioPath) {
     /*
-     * 4 = audio
+     * 4 = audio nếu có title, 3 = audio nếu không có title.
      */
     cmdParts.push(`-stream_loop -1 -i ${q(audioPath)}`);
 
-    audioMap = `-map 4:a:0 ` + `-c:a aac ` + `-b:a 128k`;
+    const audioInputIndex = hasTitle ? 4 : 3;
+
+    audioMap =
+      `-map ${audioInputIndex}:a:0 ` + `-c:a aac ` + `-b:a 128k`;
   }
 
   // =====================================================
@@ -1237,13 +1279,15 @@ async function renderStoryCard({
 
       thumbnailRatio: "16:9",
 
+      titlePresent: hasTitle,
+
       titleLines: titleLines.length,
 
       titleMaxLines: 2,
 
-      titleRounded: true,
+      titleRounded: hasTitle,
 
-      titleOverlapPx: 2,
+      titleOverlapPx: hasTitle ? 2 : 0,
 
       contentWords: clippedContent.split(/\s+/).filter(Boolean).length,
 
@@ -1295,6 +1339,9 @@ async function renderStoryCard({
 router.post("/", async (req, res) => {
   const { image, title, content } = req.body || {};
 
+  const normalizedTitle =
+    typeof title === "string" ? normalizeText(title) : "";
+
   // =====================================================
   // VALIDATE IMAGE
   // =====================================================
@@ -1311,11 +1358,11 @@ router.post("/", async (req, res) => {
   // VALIDATE TITLE
   // =====================================================
 
-  if (!title || typeof title !== "string" || !title.trim()) {
+  if (title !== undefined && title !== null && typeof title !== "string") {
     return res.status(400).json({
       success: false,
 
-      error: "title is required",
+      error: "title must be a string when provided",
     });
   }
 
@@ -1380,7 +1427,11 @@ router.post("/", async (req, res) => {
 
     console.log(`║ Image: ${image.substring(0, 70)}`);
 
-    console.log(`║ Title: ${title.substring(0, 100)}`);
+    console.log(
+      normalizedTitle
+        ? `║ Title: ${normalizedTitle.substring(0, 100)}`
+        : "║ Title: none",
+    );
 
     console.log(
       `║ Content words: ${
@@ -1445,7 +1496,7 @@ router.post("/", async (req, res) => {
 
       audioPath,
 
-      title: normalizeText(title),
+      title: normalizedTitle,
 
       content: normalizeText(content),
 
