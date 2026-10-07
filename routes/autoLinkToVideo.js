@@ -12,9 +12,9 @@ const { promisify } = require("util");
 // UPLOAD
 // =========================================================
 
-const { uploadVideo } = require("../utils/uploadService");
+// const { uploadVideo } = require("../utils/uploadService");
 
-// const { uploadVideo } = require("../utils/uploadTempVideo");
+const { uploadVideo } = require("../utils/uploadTempVideo");
 
 // const { uploadVideo } = require("../utils/uploadVps");
 
