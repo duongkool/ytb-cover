@@ -70,6 +70,10 @@ const BODY_WRAP_SAFETY = 64;
 const BODY_PADDING_LEFT = 32;
 const BODY_PADDING_RIGHT = 44;
 
+const JP_BODY_PADDING_RIGHT = 24;
+const JP_BODY_WRAP_SAFETY = 4;
+const JP_MAX_CONTENT_CHARS = 360;
+
 // =========================================================
 // PATHS
 // =========================================================
@@ -81,8 +85,14 @@ const BG_VIDEO_FILE = path.join(__dirname, "..", "us.mp4");
 const FALLBACK_AUDIO_DIR = path.join(__dirname, "..", "demo", "audio");
 
 const FONT_FILE = path.join(__dirname, "..", "fonts", "Arial Bold.ttf");
+const JP_FONT_FILE = path.join(__dirname, "..", "fonts", "NotoSansJP-Bold.otf");
 
 const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
+
+const DEFAULT_FONT_FAMILY = "Arial";
+const JP_FONT_FAMILY = "AutoLinkJP";
+
+const FONT_DATA_URI_CACHE = new Map();
 
 // =========================================================
 // FIXED AUDIO
@@ -175,6 +185,116 @@ function escapeXml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+async function fontFileToDataUri(fontPath) {
+  if (!fontPath) {
+    return "";
+  }
+
+  const cached = FONT_DATA_URI_CACHE.get(fontPath);
+
+  if (cached) {
+    return cached;
+  }
+
+  const buffer = await fs.promises.readFile(fontPath);
+  const extension = path.extname(fontPath).toLowerCase();
+  const mime = extension === ".otf" ? "font/otf" : "font/ttf";
+  const dataUri = `data:${mime};base64,${buffer.toString("base64")}`;
+
+  FONT_DATA_URI_CACHE.set(fontPath, dataUri);
+
+  return dataUri;
+}
+
+async function createSvgFontFace({ fontFamily, fontFile }) {
+  if (!fontFile) {
+    return "";
+  }
+
+  const dataUri = await fontFileToDataUri(fontFile);
+
+  return `
+    <defs>
+      <style>
+        @font-face {
+          font-family: '${fontFamily}';
+          src: url('${dataUri}') format('opentype');
+          font-weight: 700;
+          font-style: normal;
+        }
+      </style>
+    </defs>
+  `;
+}
+
+function containsJapanese(text = "") {
+  return /[\u3040-\u30ff\u31f0-\u31ff]/.test(String(text || ""));
+}
+
+function containsCjk(text = "") {
+  return /[\u3000-\u303f\u3040-\u30ff\u31f0-\u31ff\u3400-\u9fff\uff00-\uffef]/.test(
+    String(text || ""),
+  );
+}
+
+function isCjkCharacter(character) {
+  return /[\u3000-\u303f\u3040-\u30ff\u31f0-\u31ff\u3400-\u9fff\uff00-\uffef]/.test(
+    character,
+  );
+}
+
+function isNoLineStartPunctuation(character) {
+  return /^[、。，．｡､）」』】〕〉》!?！？:：;；]$/.test(
+    String(character || ""),
+  );
+}
+
+function normalizeLanguage(language, sampleText = "") {
+  const value = String(language || "")
+    .trim()
+    .toLowerCase();
+
+  if (["jp", "ja", "japan", "japanese", "nhật", "nhat"].includes(value)) {
+    return "jp";
+  }
+
+  if (containsJapanese(sampleText) || containsCjk(sampleText)) {
+    return "jp";
+  }
+
+  return "default";
+}
+
+function getTypographyByLanguage(languageType) {
+  if (languageType === "jp") {
+    return {
+      fontFamily: JP_FONT_FAMILY,
+      fontFile: JP_FONT_FILE,
+      bodyFontSize: 30,
+      bodyLineHeight: 44,
+      bodyLetterSpacing: 0,
+      bodyPaddingRight: JP_BODY_PADDING_RIGHT,
+      bodyWrapSafety: JP_BODY_WRAP_SAFETY,
+      maxContentChars: JP_MAX_CONTENT_CHARS,
+      titleFontSize: 27,
+      titleLineHeight: 36,
+    };
+  }
+
+  return {
+    fontFamily: DEFAULT_FONT_FAMILY,
+    fontFile: null,
+    bodyFontSize: BODY_FONT_SIZE,
+    bodyLineHeight: BODY_LINE_HEIGHT,
+    bodyLetterSpacing: BODY_LETTER_SPACING,
+    bodyPaddingRight: BODY_PADDING_RIGHT,
+    bodyWrapSafety: BODY_WRAP_SAFETY,
+    maxContentChars: null,
+    titleFontSize: 28,
+    titleLineHeight: 34,
+  };
 }
 
 // =========================================================
@@ -315,14 +435,55 @@ function pickRandomFallbackAudio() {
 }
 
 // =========================================================
-// LIMIT CONTENT TO 120 WORDS
+// LIMIT CONTENT
 // =========================================================
 
-function clampStoryContentByWords(text, maxWords = 120) {
+function getTextStats(text, languageType = "default") {
+  const clean = normalizeText(text);
+  const words = clean ? clean.split(/\s+/).filter(Boolean) : [];
+  const characters = Array.from(clean.replace(/\s/g, ""));
+
+  if (languageType === "jp") {
+    return {
+      countMode: "characters",
+      words: words.length,
+      characters: characters.length,
+      displayUnits: characters.length,
+    };
+  }
+
+  return {
+    countMode: "words",
+    words: words.length,
+    characters: characters.length,
+    displayUnits: words.length,
+  };
+}
+
+function clampStoryContentByLanguage({
+  text,
+  languageType = "default",
+  maxWords = 120,
+  maxCharacters = JP_MAX_CONTENT_CHARS,
+}) {
   const clean = normalizeText(text);
 
   if (!clean) {
     return "";
+  }
+
+  if (languageType === "jp") {
+    const characters = Array.from(clean);
+
+    if (characters.length <= maxCharacters) {
+      return clean;
+    }
+
+    return `${characters
+      .slice(0, maxCharacters)
+      .join("")
+      .replace(/[、。！？\s]+$/u, "")
+      .trim()}...`;
   }
 
   const words = clean.split(/\s+/).filter(Boolean);
@@ -338,14 +499,17 @@ function clampStoryContentByWords(text, maxWords = 120) {
 // SPLIT SENTENCES
 // =========================================================
 
-function splitSentences(text) {
+function splitSentences(text, languageType = "default") {
   const clean = normalizeText(text);
 
   if (!clean) {
     return [];
   }
 
-  const matches = clean.match(/[^.]+\.?/g) || [];
+  const sentencePattern =
+    languageType === "jp" ? /[^.!?。！？]+[.!?。！？]?/g : /[^.]+\.?/g;
+
+  const matches = clean.match(sentencePattern) || [];
 
   return matches.map((item) => item.trim()).filter(Boolean);
 }
@@ -367,6 +531,8 @@ function estimateTextWidthPx(text, fontSize, letterSpacing = 0) {
   for (const char of value) {
     if (char === " ") {
       width += fontSize * 0.33;
+    } else if (isCjkCharacter(char)) {
+      width += fontSize;
     } else if (/[ilI1.,'":;!|]/.test(char)) {
       width += fontSize * 0.29;
     } else if (/[mwMW@%&#]/.test(char)) {
@@ -387,7 +553,7 @@ function estimateTextWidthPx(text, fontSize, letterSpacing = 0) {
   /*
    * Safety estimate.
    */
-  return width * 1.03;
+  return width * (containsCjk(value) ? 1 : 1.03);
 }
 
 // =========================================================
@@ -403,6 +569,64 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
 
   if (!clean) {
     return [];
+  }
+
+  if (containsCjk(clean)) {
+    const units = Array.from(clean);
+    const lines = [];
+    let currentLine = "";
+    let index = 0;
+
+    while (index < units.length && lines.length < 2) {
+      const unit = units[index];
+
+      if (/\s/.test(unit) && !currentLine) {
+        index += 1;
+        continue;
+      }
+
+      const candidate = currentLine + unit;
+
+      if (
+        estimateTextWidthPx(candidate, fontSize, 0) <= maxWidth ||
+        isNoLineStartPunctuation(unit)
+      ) {
+        currentLine = candidate;
+        index += 1;
+        continue;
+      }
+
+      if (currentLine) {
+        lines.push(currentLine.trimEnd());
+        currentLine = "";
+        continue;
+      }
+
+      lines.push(`${unit}...`);
+      index += 1;
+    }
+
+    if (currentLine && lines.length < 2) {
+      lines.push(currentLine.trimEnd());
+    }
+
+    if (index < units.length && lines.length > 0) {
+      const lastIndex = lines.length - 1;
+      let lastLine = lines[lastIndex];
+
+      while (
+        lastLine &&
+        estimateTextWidthPx(`${lastLine}...`, fontSize, 0) > maxWidth
+      ) {
+        lastLine = Array.from(lastLine).slice(0, -1).join("");
+      }
+
+      lines[lastIndex] = lastLine
+        ? `${lastLine.replace(/[ .,!?:;"'”’)-。！？、]+$/, "").trim()}...`
+        : "...";
+    }
+
+    return lines.slice(0, 2);
   }
 
   const words = clean.split(/\s+/).filter(Boolean);
@@ -488,6 +712,70 @@ function buildTitleLines({ title, maxWidth, fontSize }) {
   return lines.slice(0, 2);
 }
 
+function tokenizeBodySentence(sentence) {
+  const value = String(sentence || "");
+
+  if (!containsCjk(value)) {
+    return value
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => ({
+        text: word,
+        isSpace: false,
+        prependSpace: true,
+      }));
+  }
+
+  const tokens = [];
+  let buffer = "";
+
+  function flushBuffer() {
+    const words = buffer.split(/\s+/).filter(Boolean);
+
+    for (const word of words) {
+      tokens.push({
+        text: word,
+        isSpace: false,
+        prependSpace: false,
+      });
+    }
+
+    buffer = "";
+  }
+
+  for (const character of Array.from(value)) {
+    if (/\s/.test(character)) {
+      flushBuffer();
+
+      tokens.push({
+        text: " ",
+        isSpace: true,
+        prependSpace: false,
+      });
+
+      continue;
+    }
+
+    if (isCjkCharacter(character)) {
+      flushBuffer();
+
+      tokens.push({
+        text: character,
+        isSpace: false,
+        prependSpace: false,
+      });
+
+      continue;
+    }
+
+    buffer += character;
+  }
+
+  flushBuffer();
+
+  return tokens;
+}
+
 // =========================================================
 // BODY LAYOUT
 // =========================================================
@@ -507,8 +795,9 @@ function buildContinuousBodyLines({
   maxWidth,
   fontSize,
   letterSpacing,
+  languageType = "default",
 }) {
-  const sentences = splitSentences(content);
+  const sentences = splitSentences(content, languageType);
 
   const lines = [];
 
@@ -537,39 +826,63 @@ function buildContinuousBodyLines({
 
     const color = sentenceIndex % 2 === 0 ? COLOR_WHITE : COLOR_HIGHLIGHT;
 
-    const words = sentence.split(/\s+/).filter(Boolean);
+    const tokens = tokenizeBodySentence(sentence);
 
-    for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
-      const word = words[wordIndex];
+    for (const token of tokens) {
+      if (token.isSpace) {
+        if (currentLine.length === 0) {
+          continue;
+        }
 
-      /*
-       * Nếu dòng hiện tại đã có text
-       * thì word mới có đúng 1 space phía trước.
-       *
-       * Điều này đảm bảo:
-       *
-       * her. All of it...
-       *
-       * thay vì:
-       *
-       * her.All of it...
-       */
-      let text = currentLine.length > 0 ? ` ${word}` : word;
+        const lastSegment = currentLine[currentLine.length - 1];
+
+        if (lastSegment?.text?.endsWith(" ")) {
+          continue;
+        }
+
+        const spaceWidth = estimateTextWidthPx(" ", fontSize, letterSpacing);
+
+        if (currentWidth + spaceWidth > maxWidth) {
+          pushLine();
+          continue;
+        }
+
+        if (lastSegment && lastSegment.color === color) {
+          lastSegment.text += " ";
+        } else {
+          currentLine.push({
+            text: " ",
+            color,
+            sentenceIndex,
+          });
+        }
+
+        currentWidth += spaceWidth;
+        continue;
+      }
+
+      const shouldPrependSpace = token.prependSpace && currentLine.length > 0;
+
+      let text = shouldPrependSpace ? ` ${token.text}` : token.text;
 
       let width = estimateTextWidthPx(text, fontSize, letterSpacing);
 
       /*
-       * Nếu word mới vượt safe wrap width,
+       * Nếu token mới vượt safe wrap width,
        * xuống dòng trước khi thêm.
        */
-      if (currentLine.length > 0 && currentWidth + width > maxWidth) {
+      if (
+        currentLine.length > 0 &&
+        currentWidth + width > maxWidth &&
+        !isNoLineStartPunctuation(token.text)
+      ) {
         pushLine();
 
         /*
          * Đầu dòng mới:
          * không có leading space.
          */
-        text = word;
+        text = token.text;
 
         width = estimateTextWidthPx(text, fontSize, letterSpacing);
       }
@@ -672,6 +985,12 @@ async function createBodyOverlay({
   lineHeight = BODY_LINE_HEIGHT,
 
   letterSpacing = BODY_LETTER_SPACING,
+
+  fontFamily = DEFAULT_FONT_FAMILY,
+
+  fontFile = null,
+
+  languageType = "default",
 }) {
   /*
    * Chỉ dùng wrapWidth để quyết định line.
@@ -684,6 +1003,8 @@ async function createBodyOverlay({
     fontSize,
 
     letterSpacing,
+
+    languageType,
   });
 
   const paddingTop = 5;
@@ -716,7 +1037,7 @@ async function createBodyOverlay({
         `<text ` +
         `x="0" ` +
         `y="${y}" ` +
-        `font-family="Arial" ` +
+        `font-family="${fontFamily}" ` +
         `font-size="${fontSize}" ` +
         `font-weight="700" ` +
         `letter-spacing="${letterSpacing}px" ` +
@@ -726,6 +1047,11 @@ async function createBodyOverlay({
       );
     })
     .join("");
+
+  const fontFaceSvg = await createSvgFontFace({
+    fontFamily,
+    fontFile,
+  });
 
   /*
    * SVG/PNG vẫn có WIDTH LỚN.
@@ -741,6 +1067,7 @@ async function createBodyOverlay({
       viewBox="0 0 ${width} ${height}"
       xmlns="http://www.w3.org/2000/svg"
     >
+      ${fontFaceSvg}
       ${svgLines}
     </svg>
   `;
@@ -764,16 +1091,89 @@ async function createBodyOverlay({
   };
 }
 
+async function createTitleTextOverlay({
+  outputPath,
+  lines,
+  width,
+  height,
+  fontSize,
+  lineHeight,
+  paddingY,
+  fontFamily,
+  fontFile = null,
+}) {
+  const safeWidth = Math.max(2, Math.round(width));
+  const safeHeight = Math.max(2, Math.round(height));
+  const centerX = safeWidth / 2;
+
+  const svgLines = lines
+    .map((line, index) => {
+      const y = paddingY + fontSize * 0.95 + index * lineHeight;
+
+      return (
+        `<text ` +
+        `x="${centerX}" ` +
+        `y="${y}" ` +
+        `text-anchor="middle" ` +
+        `font-family="${fontFamily}" ` +
+        `font-size="${fontSize}" ` +
+        `font-weight="700" ` +
+        `fill="${COLOR_TITLE_TEXT}" ` +
+        `stroke="rgba(0,0,0,0.35)" ` +
+        `stroke-width="1.2" ` +
+        `stroke-linejoin="round" ` +
+        `paint-order="stroke fill" ` +
+        `xml:space="preserve">` +
+        `${escapeXml(line)}` +
+        `</text>`
+      );
+    })
+    .join("");
+
+  const fontFaceSvg = await createSvgFontFace({
+    fontFamily,
+    fontFile,
+  });
+
+  const svg = `
+    <svg
+      width="${safeWidth}"
+      height="${safeHeight}"
+      viewBox="0 0 ${safeWidth} ${safeHeight}"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      ${fontFaceSvg}
+      ${svgLines}
+    </svg>
+  `;
+
+  await sharp(Buffer.from(svg)).png().toFile(outputPath);
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to create title text overlay");
+  }
+
+  return outputPath;
+}
+
 // =========================================================
 // TITLE FILTERS
 // =========================================================
 
-function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
+function buildTitleFilters({
+  title,
+  tempDir,
+  cardX,
+  cardW,
+  imageBottomY,
+  typography,
+  useTitlePng = false,
+}) {
   const filters = [];
 
-  const titleFontSize = 28;
+  const titleFontSize = typography.titleFontSize;
 
-  const titleLineHeight = 34;
+  const titleLineHeight = typography.titleLineHeight;
 
   const titlePaddingY = 10;
 
@@ -808,34 +1208,36 @@ function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
 
   const fontPath = escapeFilterPath(FONT_FILE);
 
-  titleLines.forEach((line, index) => {
-    const txtPath = path.join(tempDir, `title_${index}.txt`);
+  if (!useTitlePng) {
+    titleLines.forEach((line, index) => {
+      const txtPath = path.join(tempDir, `title_${index}.txt`);
 
-    fs.writeFileSync(
-      txtPath,
+      fs.writeFileSync(
+        txtPath,
 
-      normalizeForTextfile(line),
+        normalizeForTextfile(line),
 
-      "utf8",
-    );
+        "utf8",
+      );
 
-    const textPath = escapeFilterPath(txtPath);
+      const textPath = escapeFilterPath(txtPath);
 
-    const y = titleBoxY + titlePaddingY + index * titleLineHeight;
+      const y = titleBoxY + titlePaddingY + index * titleLineHeight;
 
-    filters.push(
-      `drawtext=` +
-        `fontfile='${fontPath}':` +
-        `textfile='${textPath}':` +
-        `reload=0:` +
-        `fontcolor=${COLOR_TITLE_TEXT}:` +
-        `fontsize=${titleFontSize}:` +
-        `x=${titleBoxX}+(${titleBoxW}-text_w)/2:` +
-        `y=${y}:` +
-        `bordercolor=black@0.35:` +
-        `borderw=1`,
-    );
-  });
+      filters.push(
+        `drawtext=` +
+          `fontfile='${fontPath}':` +
+          `textfile='${textPath}':` +
+          `reload=0:` +
+          `fontcolor=${COLOR_TITLE_TEXT}:` +
+          `fontsize=${titleFontSize}:` +
+          `x=${titleBoxX}+(${titleBoxW}-text_w)/2:` +
+          `y=${y}:` +
+          `bordercolor=black@0.35:` +
+          `borderw=1`,
+      );
+    });
+  }
 
   return {
     filters,
@@ -849,6 +1251,12 @@ function buildTitleFilters({ title, tempDir, cardX, cardW, imageBottomY }) {
     titleBoxW,
 
     titleBoxH,
+
+    titleFontSize,
+
+    titleLineHeight,
+
+    titlePaddingY,
   };
 }
 
@@ -864,10 +1272,15 @@ async function renderStoryCard({
   outputPath,
   tempDir,
   seconds,
+  languageType = "default",
 }) {
   const canvasW = DEFAULT_W;
 
   const canvasH = DEFAULT_H;
+
+  const typography = getTypographyByLanguage(languageType);
+
+  const useTitlePng = languageType === "jp";
 
   // =====================================================
   // MAIN CARD
@@ -905,7 +1318,13 @@ async function renderStoryCard({
   // CONTENT
   // =====================================================
 
-  const clippedContent = clampStoryContentByWords(content, 120);
+  const clippedContent = clampStoryContentByLanguage({
+    text: content,
+    languageType,
+    maxCharacters: typography.maxContentChars || JP_MAX_CONTENT_CHARS,
+  });
+
+  const contentStats = getTextStats(clippedContent, languageType);
 
   // =====================================================
   // TITLE
@@ -921,6 +1340,10 @@ async function renderStoryCard({
     cardW,
 
     imageBottomY,
+
+    typography,
+
+    useTitlePng,
   });
 
   const {
@@ -935,6 +1358,12 @@ async function renderStoryCard({
     titleBoxW,
 
     titleBoxH,
+
+    titleFontSize,
+
+    titleLineHeight,
+
+    titlePaddingY,
   } = titleLayout;
 
   const hasTitle = titleLines.length > 0;
@@ -959,19 +1388,43 @@ async function renderStoryCard({
     });
   }
 
+  const titleTextPath = path.join(tempDir, "title-text.png");
+
+  if (hasTitle && useTitlePng) {
+    await createTitleTextOverlay({
+      outputPath: titleTextPath,
+
+      lines: titleLines,
+
+      width: titleBoxW,
+
+      height: titleBoxH,
+
+      fontSize: titleFontSize,
+
+      lineHeight: titleLineHeight,
+
+      paddingY: titlePaddingY,
+
+      fontFamily: typography.fontFamily,
+
+      fontFile: typography.fontFile,
+    });
+  }
+
   // =====================================================
   // BODY SETTINGS
   // =====================================================
 
-  const contentFontSize = BODY_FONT_SIZE;
+  const contentFontSize = typography.bodyFontSize;
 
-  const contentLineHeight = BODY_LINE_HEIGHT;
+  const contentLineHeight = typography.bodyLineHeight;
 
-  const contentLetterSpacing = BODY_LETTER_SPACING;
+  const contentLetterSpacing = typography.bodyLetterSpacing;
 
   const contentPaddingX = BODY_PADDING_LEFT;
 
-  const contentRightPadding = BODY_PADDING_RIGHT;
+  const contentRightPadding = typography.bodyPaddingRight;
 
   /*
    * Vị trí bắt đầu body.
@@ -1018,10 +1471,12 @@ async function renderStoryCard({
    * => có nhiều buffer bên phải
    * => tận dụng phần đen phía dưới.
    */
+  const contentWrapSafety = typography.bodyWrapSafety;
+
   const contentWrapWidth = Math.max(
     100,
 
-    contentPngWidth - contentRightPadding - BODY_WRAP_SAFETY,
+    contentPngWidth - contentRightPadding - contentWrapSafety,
   );
 
   /*
@@ -1056,6 +1511,12 @@ async function renderStoryCard({
     lineHeight: contentLineHeight,
 
     letterSpacing: contentLetterSpacing,
+
+    fontFamily: typography.fontFamily,
+
+    fontFile: typography.fontFile,
+
+    languageType,
   });
 
   // =====================================================
@@ -1063,17 +1524,16 @@ async function renderStoryCard({
   //
   // 0 = background
   // 1 = thumbnail
-  // Nếu có title:
-  //   2 = title background
-  //   3 = body PNG
-  //   4 = audio nếu có
-  //
-  // Nếu không có title:
-  //   2 = body PNG
-  //   3 = audio nếu có
+  // Các input còn lại được cấp index theo đúng thứ tự push vào cmdParts.
   // =====================================================
 
-  const bodyInputIndex = hasTitle ? 3 : 2;
+  let nextInputIndex = 2;
+
+  const titleBgInputIndex = hasTitle ? nextInputIndex++ : null;
+
+  const bodyInputIndex = nextInputIndex++;
+
+  const titleTextInputIndex = hasTitle && useTitlePng ? nextInputIndex++ : null;
 
   const filterParts = [
     /*
@@ -1119,7 +1579,6 @@ async function renderStoryCard({
      * THUMBNAIL
      */
     `[panel][thumb]` + `overlay=${cardX}:${cardY}:format=auto` + `[withthumb]`,
-
   ];
 
   if (hasTitle) {
@@ -1127,7 +1586,7 @@ async function renderStoryCard({
       /*
        * TITLE BACKGROUND
        */
-      `[2:v]` + `format=rgba` + `[titlebg]`,
+      `[${titleBgInputIndex}:v]` + `format=rgba` + `[titlebg]`,
 
       /*
        * TITLE BG
@@ -1142,17 +1601,35 @@ async function renderStoryCard({
       `[withtitlebg][bodypng]` +
         `overlay=${contentX}:${contentY}:format=auto` +
         `[withbody]`,
-
-      /*
-       * TITLE TEXT
-       */
-      `[withbody]` +
-        `${titleTextFilters.join(",")},` +
-        `fps=${OUTPUT_FPS},` +
-        `format=yuv420p,` +
-        `setpts=N/(${OUTPUT_FPS}*TB)` +
-        `[v]`,
     );
+
+    if (useTitlePng) {
+      filterParts.push(
+        /*
+         * TITLE TEXT PNG
+         */
+        `[${titleTextInputIndex}:v]` + `format=rgba` + `[titletext]`,
+
+        `[withbody][titletext]` +
+          `overlay=${titleBoxX}:${titleBoxY}:format=auto,` +
+          `fps=${OUTPUT_FPS},` +
+          `format=yuv420p,` +
+          `setpts=N/(${OUTPUT_FPS}*TB)` +
+          `[v]`,
+      );
+    } else {
+      filterParts.push(
+        /*
+         * TITLE TEXT
+         */
+        `[withbody]` +
+          `${titleTextFilters.join(",")},` +
+          `fps=${OUTPUT_FPS},` +
+          `format=yuv420p,` +
+          `setpts=N/(${OUTPUT_FPS}*TB)` +
+          `[v]`,
+      );
+    }
   } else {
     filterParts.push(
       /*
@@ -1196,7 +1673,6 @@ async function renderStoryCard({
      * 1 = thumbnail
      */
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(imagePath)}`,
-
   ];
 
   if (hasTitle) {
@@ -1215,6 +1691,15 @@ async function renderStoryCard({
     `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(bodyOverlayPath)}`,
   );
 
+  if (hasTitle && useTitlePng) {
+    cmdParts.push(
+      /*
+       * title text PNG.
+       */
+      `-framerate ${OUTPUT_FPS} -loop 1 -i ${q(titleTextPath)}`,
+    );
+  }
+
   // =====================================================
   // AUDIO
   // =====================================================
@@ -1222,15 +1707,11 @@ async function renderStoryCard({
   let audioMap = "-an";
 
   if (audioPath) {
-    /*
-     * 4 = audio nếu có title, 3 = audio nếu không có title.
-     */
     cmdParts.push(`-stream_loop -1 -i ${q(audioPath)}`);
 
-    const audioInputIndex = hasTitle ? 4 : 3;
+    const audioInputIndex = nextInputIndex++;
 
-    audioMap =
-      `-map ${audioInputIndex}:a:0 ` + `-c:a aac ` + `-b:a 128k`;
+    audioMap = `-map ${audioInputIndex}:a:0 ` + `-c:a aac ` + `-b:a 128k`;
   }
 
   // =====================================================
@@ -1289,15 +1770,34 @@ async function renderStoryCard({
 
       titleOverlapPx: hasTitle ? 2 : 0,
 
-      contentWords: clippedContent.split(/\s+/).filter(Boolean).length,
+      contentWords:
+        contentStats.countMode === "characters"
+          ? contentStats.displayUnits
+          : contentStats.words,
 
-      contentChars: clippedContent.length,
+      contentRawWords: contentStats.words,
+
+      contentChars: contentStats.characters,
+
+      contentDisplayUnits: contentStats.displayUnits,
+
+      contentCountMode: contentStats.countMode,
 
       contentFontSize,
 
       contentLineHeight,
 
       contentLetterSpacing,
+
+      language: languageType,
+
+      titleRenderMode: hasTitle
+        ? useTitlePng
+          ? "svg-sharp"
+          : "drawtext"
+        : "none",
+
+      bodyFontFamily: typography.fontFamily,
 
       contentPaddingLeft: contentPaddingX,
 
@@ -1313,7 +1813,7 @@ async function renderStoryCard({
        */
       contentWrapWidth,
 
-      contentWrapSafety: BODY_WRAP_SAFETY,
+      contentWrapSafety,
 
       contentLines: bodyOverlay.lineCount,
 
@@ -1337,10 +1837,14 @@ async function renderStoryCard({
 // =========================================================
 
 router.post("/", async (req, res) => {
-  const { image, title, content } = req.body || {};
+  const { image, title, content, language } = req.body || {};
 
-  const normalizedTitle =
-    typeof title === "string" ? normalizeText(title) : "";
+  const normalizedTitle = typeof title === "string" ? normalizeText(title) : "";
+
+  const languageType = normalizeLanguage(
+    language,
+    `${normalizedTitle} ${typeof content === "string" ? content : ""}`,
+  );
 
   // =====================================================
   // VALIDATE IMAGE
@@ -1363,6 +1867,18 @@ router.post("/", async (req, res) => {
       success: false,
 
       error: "title must be a string when provided",
+    });
+  }
+
+  if (
+    language !== undefined &&
+    language !== null &&
+    typeof language !== "string"
+  ) {
+    return res.status(400).json({
+      success: false,
+
+      error: "language must be a string when provided",
     });
   }
 
@@ -1402,6 +1918,14 @@ router.post("/", async (req, res) => {
     });
   }
 
+  if (languageType === "jp" && !fs.existsSync(JP_FONT_FILE)) {
+    return res.status(500).json({
+      success: false,
+
+      error: "Missing Japanese font: NotoSansJP-Bold.otf",
+    });
+  }
+
   // =====================================================
   // JOB
   // =====================================================
@@ -1419,6 +1943,8 @@ router.post("/", async (req, res) => {
   const finalPath = path.join(tempDir, "final.mp4");
 
   try {
+    const requestContentStats = getTextStats(content, languageType);
+
     console.log("\n╔══════════════════════════════════════════╗");
 
     console.log("║ 🎬 STORY CARD");
@@ -1434,14 +1960,14 @@ router.post("/", async (req, res) => {
     );
 
     console.log(
-      `║ Content words: ${
-        normalizeText(content).split(/\s+/).filter(Boolean).length
-      }`,
+      `║ Content ${requestContentStats.countMode}: ${requestContentStats.displayUnits}`,
     );
 
     console.log(`║ Body font: ${BODY_FONT_SIZE}px`);
 
     console.log(`║ Letter spacing: ${BODY_LETTER_SPACING}px`);
+
+    console.log(`║ Language: ${languageType}`);
 
     console.log(
       `║ Body padding: L${BODY_PADDING_LEFT}px / R${BODY_PADDING_RIGHT}px`,
@@ -1505,6 +2031,8 @@ router.post("/", async (req, res) => {
       tempDir,
 
       seconds: DEFAULT_SECONDS,
+
+      languageType,
     });
 
     console.log("📐 Render metadata:", renderResult.metadata);
