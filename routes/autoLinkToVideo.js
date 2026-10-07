@@ -12,9 +12,9 @@ const { promisify } = require("util");
 // UPLOAD
 // =========================================================
 
-// const { uploadVideo } = require("../utils/uploadService");
+const { uploadVideo } = require("../utils/uploadService");
 
-const { uploadVideo } = require("../utils/uploadTempVideo");
+// const { uploadVideo } = require("../utils/uploadTempVideo");
 
 // const { uploadVideo } = require("../utils/uploadVps");
 
@@ -73,6 +73,12 @@ const BODY_PADDING_RIGHT = 44;
 const JP_BODY_PADDING_RIGHT = 24;
 const JP_BODY_WRAP_SAFETY = 4;
 const JP_MAX_CONTENT_CHARS = 360;
+const JP_TEXT_EMBOLDEN_OFFSETS = [
+  [0, 0],
+  [1, 0],
+  [0, 1],
+  [1, 1],
+];
 
 // =========================================================
 // PATHS
@@ -91,8 +97,6 @@ const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
 
 const DEFAULT_FONT_FAMILY = "Arial";
 const JP_FONT_FAMILY = "AutoLinkJP";
-
-const FONT_DATA_URI_CACHE = new Map();
 
 // =========================================================
 // FIXED AUDIO
@@ -185,48 +189,6 @@ function escapeXml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
-}
-
-async function fontFileToDataUri(fontPath) {
-  if (!fontPath) {
-    return "";
-  }
-
-  const cached = FONT_DATA_URI_CACHE.get(fontPath);
-
-  if (cached) {
-    return cached;
-  }
-
-  const buffer = await fs.promises.readFile(fontPath);
-  const extension = path.extname(fontPath).toLowerCase();
-  const mime = extension === ".otf" ? "font/otf" : "font/ttf";
-  const dataUri = `data:${mime};base64,${buffer.toString("base64")}`;
-
-  FONT_DATA_URI_CACHE.set(fontPath, dataUri);
-
-  return dataUri;
-}
-
-async function createSvgFontFace({ fontFamily, fontFile }) {
-  if (!fontFile) {
-    return "";
-  }
-
-  const dataUri = await fontFileToDataUri(fontFile);
-
-  return `
-    <defs>
-      <style>
-        @font-face {
-          font-family: '${fontFamily}';
-          src: url('${dataUri}') format('opentype');
-          font-weight: 700;
-          font-style: normal;
-        }
-      </style>
-    </defs>
-  `;
 }
 
 function containsJapanese(text = "") {
@@ -912,6 +874,136 @@ function buildContinuousBodyLines({
   return lines;
 }
 
+async function renderTextImageWithFontFile({
+  segments,
+  fontFamily,
+  fontFile,
+  fontSize,
+}) {
+  const markup = segments
+    .map((segment) => {
+      const color = escapeXml(segment.color || COLOR_WHITE);
+      const text = escapeXml(segment.text || "");
+
+      return `<span foreground="${color}">${text}</span>`;
+    })
+    .join("");
+
+  return sharp({
+    text: {
+      text: markup || " ",
+      font: `${fontFamily} ${fontSize}`,
+      fontfile: fontFile,
+      rgba: true,
+      dpi: 72,
+      wrap: "none",
+    },
+  })
+    .png()
+    .toBuffer({
+      resolveWithObject: true,
+    });
+}
+
+function pushCompositeCopies({
+  composites,
+  input,
+  left,
+  top,
+  offsets = [[0, 0]],
+}) {
+  for (const [offsetX, offsetY] of offsets) {
+    composites.push({
+      input,
+      left: Math.max(0, left + offsetX),
+      top: Math.max(0, top + offsetY),
+    });
+  }
+}
+
+async function createBodyOverlayWithFontFile({
+  outputPath,
+  content,
+  width,
+  wrapWidth,
+  fontSize,
+  lineHeight,
+  letterSpacing,
+  fontFamily,
+  fontFile,
+  languageType,
+}) {
+  const lines = buildContinuousBodyLines({
+    content,
+    maxWidth: wrapWidth,
+    fontSize,
+    letterSpacing,
+    languageType,
+  });
+
+  const paddingTop = 5;
+  const paddingBottom = 10;
+
+  const height = Math.max(
+    lineHeight,
+    paddingTop + lines.length * lineHeight + paddingBottom,
+  );
+
+  const composites = [];
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    const rendered = await renderTextImageWithFontFile({
+      segments: line,
+      fontFamily,
+      fontFile,
+      fontSize,
+    });
+
+    const top =
+      paddingTop +
+      lineIndex * lineHeight +
+      Math.max(0, Math.round((lineHeight - rendered.info.height) / 2));
+
+    pushCompositeCopies({
+      composites,
+      input: rendered.data,
+      left: 0,
+      top,
+      offsets: JP_TEXT_EMBOLDEN_OFFSETS,
+    });
+  }
+
+  await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: {
+        r: 0,
+        g: 0,
+        b: 0,
+        alpha: 0,
+      },
+    },
+  })
+    .composite(composites)
+    .png()
+    .toFile(outputPath);
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to create body overlay");
+  }
+
+  return {
+    outputPath,
+    width,
+    wrapWidth,
+    height,
+    lineCount: lines.length,
+  };
+}
+
 // =========================================================
 // CREATE ROUNDED TITLE BACKGROUND
 // =========================================================
@@ -992,6 +1084,21 @@ async function createBodyOverlay({
 
   languageType = "default",
 }) {
+  if (fontFile) {
+    return createBodyOverlayWithFontFile({
+      outputPath,
+      content,
+      width,
+      wrapWidth,
+      fontSize,
+      lineHeight,
+      letterSpacing,
+      fontFamily,
+      fontFile,
+      languageType,
+    });
+  }
+
   /*
    * Chỉ dùng wrapWidth để quyết định line.
    */
@@ -1048,11 +1155,6 @@ async function createBodyOverlay({
     })
     .join("");
 
-  const fontFaceSvg = await createSvgFontFace({
-    fontFamily,
-    fontFile,
-  });
-
   /*
    * SVG/PNG vẫn có WIDTH LỚN.
    *
@@ -1067,7 +1169,6 @@ async function createBodyOverlay({
       viewBox="0 0 ${width} ${height}"
       xmlns="http://www.w3.org/2000/svg"
     >
-      ${fontFaceSvg}
       ${svgLines}
     </svg>
   `;
@@ -1091,6 +1192,104 @@ async function createBodyOverlay({
   };
 }
 
+async function createTitleTextOverlayWithFontFile({
+  outputPath,
+  lines,
+  width,
+  height,
+  fontSize,
+  lineHeight,
+  paddingY,
+  fontFamily,
+  fontFile,
+}) {
+  const safeWidth = Math.max(2, Math.round(width));
+  const safeHeight = Math.max(2, Math.round(height));
+  const composites = [];
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const text = lines[lineIndex];
+
+    const shadow = await renderTextImageWithFontFile({
+      segments: [
+        {
+          text,
+          color: "#000000",
+        },
+      ],
+      fontFamily,
+      fontFile,
+      fontSize,
+    });
+
+    const foreground = await renderTextImageWithFontFile({
+      segments: [
+        {
+          text,
+          color: COLOR_TITLE_TEXT,
+        },
+      ],
+      fontFamily,
+      fontFile,
+      fontSize,
+    });
+
+    const baseLeft = Math.round((safeWidth - foreground.info.width) / 2);
+    const baseTop =
+      paddingY +
+      lineIndex * lineHeight +
+      Math.max(0, Math.round((lineHeight - foreground.info.height) / 2));
+
+    for (const [offsetX, offsetY] of [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ]) {
+      composites.push({
+        input: shadow.data,
+        left: baseLeft + offsetX,
+        top: baseTop + offsetY,
+      });
+    }
+
+    pushCompositeCopies({
+      composites,
+      input: foreground.data,
+      left: baseLeft,
+      top: baseTop,
+      offsets: JP_TEXT_EMBOLDEN_OFFSETS,
+    });
+  }
+
+  await sharp({
+    create: {
+      width: safeWidth,
+      height: safeHeight,
+      channels: 4,
+      background: {
+        r: 0,
+        g: 0,
+        b: 0,
+        alpha: 0,
+      },
+    },
+  })
+    .composite(composites)
+    .png()
+    .toFile(outputPath);
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Failed to create title text overlay");
+  }
+
+  return outputPath;
+}
+
 async function createTitleTextOverlay({
   outputPath,
   lines,
@@ -1102,6 +1301,20 @@ async function createTitleTextOverlay({
   fontFamily,
   fontFile = null,
 }) {
+  if (fontFile) {
+    return createTitleTextOverlayWithFontFile({
+      outputPath,
+      lines,
+      width,
+      height,
+      fontSize,
+      lineHeight,
+      paddingY,
+      fontFamily,
+      fontFile,
+    });
+  }
+
   const safeWidth = Math.max(2, Math.round(width));
   const safeHeight = Math.max(2, Math.round(height));
   const centerX = safeWidth / 2;
@@ -1130,11 +1343,6 @@ async function createTitleTextOverlay({
     })
     .join("");
 
-  const fontFaceSvg = await createSvgFontFace({
-    fontFamily,
-    fontFile,
-  });
-
   const svg = `
     <svg
       width="${safeWidth}"
@@ -1142,7 +1350,6 @@ async function createTitleTextOverlay({
       viewBox="0 0 ${safeWidth} ${safeHeight}"
       xmlns="http://www.w3.org/2000/svg"
     >
-      ${fontFaceSvg}
       ${svgLines}
     </svg>
   `;
