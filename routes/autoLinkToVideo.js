@@ -76,7 +76,6 @@ const JP_MAX_CONTENT_CHARS = 360;
 const JP_TEXT_EMBOLDEN_OFFSETS = [
   [0, 0],
   [1, 0],
-  [0, 1],
 ];
 
 // =========================================================
@@ -138,6 +137,52 @@ const COLOR_TITLE_BG = "#e4c400";
 const COLOR_TITLE_TEXT = "#ffffff";
 
 const COLOR_CONTENT_BG = "#121416";
+
+const DEFAULT_COLOR_THEME = {
+  key: "default",
+  name: "Default",
+  aliases: ["0", "ma-0", "mau-0", "code-0", "goc", "mau-goc", "original"],
+  contentBackground: COLOR_CONTENT_BG,
+  bodyText: COLOR_WHITE,
+  highlight: COLOR_HIGHLIGHT,
+};
+
+const COLOR_THEMES = [
+  {
+    key: "burgundy",
+    name: "Burgundy",
+    aliases: ["1", "ma-1", "mau-1", "code-1"],
+    contentBackground: "#681D35",
+    bodyText: "#FFFFFF",
+    highlight: "#FFE17B",
+  },
+  {
+    key: "forest-green",
+    name: "Forest Green",
+    aliases: ["2", "ma-2", "mau-2", "code-2", "forestgreen"],
+    contentBackground: "#174B3C",
+    bodyText: "#FFFFFF",
+    highlight: "#FFBF82",
+  },
+  {
+    key: "warm-ivory",
+    name: "Warm Ivory",
+    aliases: ["3", "ma-3", "mau-3", "code-3", "warmivory"],
+    contentBackground: "#FFF0D5",
+    bodyText: "#211B1A",
+    highlight: "#A71935",
+  },
+  {
+    key: "midnight-blue",
+    name: "Midnight Blue",
+    aliases: ["4", "ma-4", "mau-4", "code-4", "midnightblue"],
+    contentBackground: "#102C54",
+    bodyText: "#FFFFFF",
+    highlight: "#FFE34D",
+  },
+];
+
+const SELECTABLE_COLOR_THEMES = [DEFAULT_COLOR_THEME, ...COLOR_THEMES];
 
 // =========================================================
 // INIT
@@ -243,6 +288,43 @@ function normalizeLanguage(language, sampleText = "") {
   }
 
   return "default";
+}
+
+function normalizeThemeKey(theme) {
+  return String(theme || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+}
+
+function getAvailableThemeKeys() {
+  return SELECTABLE_COLOR_THEMES.map((theme) => theme.key);
+}
+
+function resolveColorTheme(theme) {
+  const value = normalizeThemeKey(theme);
+
+  if (!value) {
+    return DEFAULT_COLOR_THEME;
+  }
+
+  if (value === "random") {
+    return SELECTABLE_COLOR_THEMES[
+      Math.floor(Math.random() * SELECTABLE_COLOR_THEMES.length)
+    ];
+  }
+
+  return (
+    SELECTABLE_COLOR_THEMES.find((colorTheme) => {
+      return (
+        colorTheme.key === value || (colorTheme.aliases || []).includes(value)
+      );
+    }) || null
+  );
 }
 
 function getTypographyByLanguage(languageType) {
@@ -856,6 +938,7 @@ function buildContinuousBodyLines({
   fontSize,
   letterSpacing,
   languageType = "default",
+  colorTheme = DEFAULT_COLOR_THEME,
 }) {
   const sentences = splitSentences(content, languageType);
 
@@ -884,7 +967,8 @@ function buildContinuousBodyLines({
   ) {
     const sentence = sentences[sentenceIndex];
 
-    const color = sentenceIndex % 2 === 0 ? COLOR_WHITE : COLOR_HIGHLIGHT;
+    const color =
+      sentenceIndex % 2 === 0 ? colorTheme.bodyText : colorTheme.highlight;
 
     const tokens = tokenizeBodySentence(sentence);
 
@@ -1030,6 +1114,7 @@ async function createBodyOverlayWithFontFile({
   fontFamily,
   fontFile,
   languageType,
+  colorTheme = DEFAULT_COLOR_THEME,
 }) {
   const lines = buildContinuousBodyLines({
     content,
@@ -1037,6 +1122,7 @@ async function createBodyOverlayWithFontFile({
     fontSize,
     letterSpacing,
     languageType,
+    colorTheme,
   });
 
   const paddingTop = 5;
@@ -1181,6 +1267,8 @@ async function createBodyOverlay({
   fontFile = null,
 
   languageType = "default",
+
+  colorTheme = DEFAULT_COLOR_THEME,
 }) {
   if (fontFile) {
     return createBodyOverlayWithFontFile({
@@ -1194,6 +1282,7 @@ async function createBodyOverlay({
       fontFamily,
       fontFile,
       languageType,
+      colorTheme,
     });
   }
 
@@ -1210,6 +1299,8 @@ async function createBodyOverlay({
     letterSpacing,
 
     languageType,
+
+    colorTheme,
   });
 
   const paddingTop = 5;
@@ -1579,6 +1670,7 @@ async function renderStoryCard({
   tempDir,
   seconds,
   languageType = "default",
+  colorTheme = DEFAULT_COLOR_THEME,
 }) {
   const canvasW = DEFAULT_W;
 
@@ -1823,6 +1915,8 @@ async function renderStoryCard({
     fontFile: typography.fontFile,
 
     languageType,
+
+    colorTheme,
   });
 
   // =====================================================
@@ -1877,7 +1971,7 @@ async function renderStoryCard({
       `y=${contentPanelY}:` +
       `w=${cardW}:` +
       `h=${contentPanelH}:` +
-      `color=${COLOR_CONTENT_BG}:` +
+      `color=${colorTheme.contentBackground}:` +
       `t=fill` +
       `[panel]`,
 
@@ -2097,6 +2191,16 @@ async function renderStoryCard({
 
       language: languageType,
 
+      theme: colorTheme.key,
+
+      themeName: colorTheme.name,
+
+      contentBackgroundColor: colorTheme.contentBackground,
+
+      contentTextColor: colorTheme.bodyText,
+
+      contentHighlightColor: colorTheme.highlight,
+
       titleRenderMode: hasTitle
         ? useTitlePng
           ? "svg-sharp"
@@ -2143,7 +2247,7 @@ async function renderStoryCard({
 // =========================================================
 
 router.post("/", async (req, res) => {
-  const { image, title, content, language } = req.body || {};
+  const { image, title, content, language, theme } = req.body || {};
 
   const normalizedTitle = typeof title === "string" ? normalizeText(title) : "";
 
@@ -2185,6 +2289,24 @@ router.post("/", async (req, res) => {
       success: false,
 
       error: "language must be a string when provided",
+    });
+  }
+
+  if (theme !== undefined && theme !== null && typeof theme !== "string") {
+    return res.status(400).json({
+      success: false,
+
+      error: "theme must be a string when provided",
+    });
+  }
+
+  const colorTheme = resolveColorTheme(theme);
+
+  if (!colorTheme) {
+    return res.status(400).json({
+      success: false,
+
+      error: `theme must be one of: random, ${getAvailableThemeKeys().join(", ")}`,
     });
   }
 
@@ -2277,6 +2399,8 @@ router.post("/", async (req, res) => {
     console.log(`║ Letter spacing: ${BODY_LETTER_SPACING}px`);
 
     console.log(`║ Language: ${languageType}`);
+
+    console.log(`║ Theme: ${colorTheme.key} (${colorTheme.name})`);
 
     console.log(
       `║ Body padding: L${BODY_PADDING_LEFT}px / R${BODY_PADDING_RIGHT}px`,
@@ -2382,6 +2506,8 @@ router.post("/", async (req, res) => {
       seconds: DEFAULT_SECONDS,
 
       languageType,
+
+      colorTheme,
     });
 
     console.log("📐 Render metadata:", renderResult.metadata);
