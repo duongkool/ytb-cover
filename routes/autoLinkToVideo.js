@@ -111,6 +111,23 @@ const FIXED_AUDIO_LINKS = [
 ];
 
 // =========================================================
+// FIXED BACKGROUND
+// =========================================================
+
+const FIXED_BACKGROUND_LINKS = [
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/HJHJJH.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/Thuy_Si_-_Thien_duong_tren_mat_dat_switzerland_nat_no_watermark_online-video-cutter.com_.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/stock-footage-landscape-reveal-as-drone-pushes-forward-revealing-brecon-beacons-perfect-for-travel-documentaries.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/snaptik.vn_7597206803176295712.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/snaptik.vn_7649990817242680594.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/15730634_2160_3840_60fps.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/YouTube.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/15360412-uhd_2160_3840_30fps.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/789.mp4",
+  "https://file.garden/aiDkIHaSGigyN2Yb/background/YR.mp4",
+];
+
+// =========================================================
 // COLORS
 // =========================================================
 
@@ -377,22 +394,104 @@ function pickRandomItem(items) {
   return items[Math.floor(Math.random() * items.length)];
 }
 
+function shuffleItems(items) {
+  const shuffled = items.slice();
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+
+    [shuffled[index], shuffled[randomIndex]] = [
+      shuffled[randomIndex],
+      shuffled[index],
+    ];
+  }
+
+  return shuffled;
+}
+
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || "").trim());
 }
 
-function pickRandomAudioLink() {
-  const links = FIXED_AUDIO_LINKS.map((link) =>
-    String(link || "").trim(),
-  ).filter(isHttpUrl);
-
-  return pickRandomItem(links);
+function getFixedMediaLinks(links) {
+  return links.map((link) => String(link || "").trim()).filter(isHttpUrl);
 }
 
 function pickRandomFallbackAudio() {
   const files = getMediaFilesFromDir(FALLBACK_AUDIO_DIR, AUDIO_EXTENSIONS);
 
   return pickRandomItem(files);
+}
+
+async function probeMediaFile(filePath, streamType, label) {
+  const expectedCodecType = streamType === "a" ? "audio" : "video";
+
+  const cmd = [
+    `ffprobe -v error`,
+    `-select_streams ${streamType}:0`,
+    `-show_entries stream=codec_type`,
+    `-of csv=p=0`,
+    q(filePath),
+  ].join(" ");
+
+  const result = await runCommand(cmd, `probe-${label}`);
+
+  const streamTypes = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!streamTypes.includes(expectedCodecType)) {
+    throw new Error(`No ${expectedCodecType} stream found`);
+  }
+}
+
+async function downloadRemoteMediaWithFallback({
+  links,
+  tempDir,
+  fileName,
+  label,
+  streamType,
+}) {
+  const candidates = shuffleItems(getFixedMediaLinks(links));
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const url = candidates[index];
+
+    const mediaPath = path.join(tempDir, `${fileName}-${index}`);
+
+    try {
+      await downloadFile(url, mediaPath);
+
+      await probeMediaFile(mediaPath, streamType, label.toLowerCase());
+
+      return {
+        path: mediaPath,
+
+        source: url,
+      };
+    } catch (error) {
+      console.warn(`⚠️ ${label} link failed: ${url}`);
+
+      console.warn(`   ${error.message}`);
+
+      try {
+        if (fs.existsSync(mediaPath)) {
+          fs.unlinkSync(mediaPath);
+        }
+      } catch (unlinkError) {
+        console.warn(
+          `⚠️ Failed to remove bad ${label}: ${unlinkError.message}`,
+        );
+      }
+    }
+  }
+
+  return {
+    path: null,
+
+    source: null,
+  };
 }
 
 // =========================================================
@@ -1472,6 +1571,7 @@ function buildTitleFilters({
 
 async function renderStoryCard({
   imagePath,
+  backgroundPath = BG_VIDEO_FILE,
   audioPath,
   title,
   content,
@@ -1873,7 +1973,7 @@ async function renderStoryCard({
     /*
      * 0 = background
      */
-    `-stream_loop -1 -i ${q(BG_VIDEO_FILE)}`,
+    `-stream_loop -1 -i ${q(backgroundPath)}`,
 
     /*
      * 1 = thumbnail
@@ -2101,10 +2201,13 @@ router.post("/", async (req, res) => {
   }
 
   // =====================================================
-  // CHECK BACKGROUND
+  // CHECK LOCAL BACKGROUND FALLBACK
   // =====================================================
 
-  if (!fs.existsSync(BG_VIDEO_FILE)) {
+  if (
+    !getFixedMediaLinks(FIXED_BACKGROUND_LINKS).length &&
+    !fs.existsSync(BG_VIDEO_FILE)
+  ) {
     return res.status(500).json({
       success: false,
 
@@ -2190,23 +2293,61 @@ router.post("/", async (req, res) => {
     await downloadFile(image.trim(), imagePath);
 
     // =================================================
+    // BACKGROUND
+    // =================================================
+
+    const backgroundResult = await downloadRemoteMediaWithFallback({
+      links: FIXED_BACKGROUND_LINKS,
+
+      tempDir,
+
+      fileName: "background-source",
+
+      label: "Background",
+
+      streamType: "v",
+    });
+
+    let backgroundPath = backgroundResult.path;
+
+    let backgroundSource = backgroundResult.source;
+
+    if (backgroundPath) {
+      console.log(`🎞️ Background URL: ${backgroundSource}`);
+    } else if (fs.existsSync(BG_VIDEO_FILE)) {
+      backgroundPath = BG_VIDEO_FILE;
+
+      backgroundSource = path.basename(BG_VIDEO_FILE);
+
+      console.log(`🎞️ Fallback background: ${backgroundSource}`);
+    } else {
+      throw new Error(
+        "No usable background found and missing fallback: us.mp4",
+      );
+    }
+
+    // =================================================
     // AUDIO
     // =================================================
 
-    const audioUrl = pickRandomAudioLink();
+    const audioResult = await downloadRemoteMediaWithFallback({
+      links: FIXED_AUDIO_LINKS,
 
-    let audioPath = null;
+      tempDir,
 
-    let audioSource = null;
+      fileName: "audio-source",
 
-    if (audioUrl) {
-      audioPath = path.join(tempDir, "audio-source");
+      label: "Audio",
 
-      await downloadFile(audioUrl, audioPath);
+      streamType: "a",
+    });
 
-      audioSource = audioUrl;
+    let audioPath = audioResult.path;
 
-      console.log(`🎵 Audio URL: ${audioUrl}`);
+    let audioSource = audioResult.source;
+
+    if (audioPath) {
+      console.log(`🎵 Audio URL: ${audioSource}`);
     } else {
       audioPath = pickRandomFallbackAudio();
 
@@ -2225,6 +2366,8 @@ router.post("/", async (req, res) => {
 
     const renderResult = await renderStoryCard({
       imagePath,
+
+      backgroundPath,
 
       audioPath,
 
