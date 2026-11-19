@@ -9,6 +9,7 @@ const { startVideoCleanupJob } = require("./utils/videoCleanup");
 const { startTempVideoCleanupJob } = require("./utils/tempVideoCleanup");
 
 const app = express();
+app.disable("x-powered-by");
 
 const VIDEO_DIR = path.join(__dirname, "public", "videos");
 if (!fs.existsSync(VIDEO_DIR)) {
@@ -72,7 +73,6 @@ app.use(
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
-app.use(express.static("public"));
 
 app.use("/api/trim", require("./routes/trim"));
 app.use("/api/cover", require("./routes/cover"));
@@ -108,6 +108,12 @@ app.get("/api/health", (req, res) => {
     voiceId: config.ELEVENLABS_VOICE_ID,
     uploadService: "local-vps",
   });
+});
+
+// API-only server: không public giao diện hoặc nội dung HTML trong thư mục public.
+// Các file media vẫn được phục vụ qua /videos và /temp-videos ở phía trên.
+app.use((_req, res) => {
+  res.status(404).end();
 });
 
 const server = http.createServer(app);
