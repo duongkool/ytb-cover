@@ -17,11 +17,16 @@ if (!fs.existsSync(VIDEO_DIR)) {
 }
 
 const TEMP_VIDEO_DIR = path.join(__dirname, "public", "temp-videos");
+const MEDIA_DIR = path.join(__dirname, "public", "media");
 
 if (!fs.existsSync(TEMP_VIDEO_DIR)) {
   fs.mkdirSync(TEMP_VIDEO_DIR, {
     recursive: true,
   });
+}
+
+if (!fs.existsSync(MEDIA_DIR)) {
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
 }
 
 const allowedOrigins = [
@@ -71,6 +76,19 @@ app.use(
   }),
 );
 
+app.use(
+  "/media",
+  express.static(MEDIA_DIR, {
+    etag: true,
+    lastModified: true,
+    maxAge: "1d",
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    },
+  }),
+);
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -111,7 +129,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // API-only server: không public giao diện hoặc nội dung HTML trong thư mục public.
-// Các file media vẫn được phục vụ qua /videos và /temp-videos ở phía trên.
+// Các file media vẫn được phục vụ qua /videos, /temp-videos và /media ở trên.
 app.use((_req, res) => {
   res.status(404).end();
 });
