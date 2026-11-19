@@ -3,6 +3,10 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+const {
+  removeRetentionMetadata,
+  setRetentionDays,
+} = require("../utils/mediaRetention");
 
 const router = express.Router();
 
@@ -12,6 +16,9 @@ const MEDIA_DIR = path.join(__dirname, "..", "public", "videos");
 const PUBLIC_BASE_URL = (
   process.env.PUBLIC_BASE_URL || "https://video.xopboo.com"
 ).replace(/\/+$/, "");
+
+const DEFAULT_RETENTION_DAYS = 5;
+const EXTENDED_RETENTION_DAYS = 30;
 
 for (const dir of [TEMP_DIR, MEDIA_DIR]) {
   if (!fs.existsSync(dir)) {
@@ -274,6 +281,19 @@ router.post("/", (req, res) => {
         throw new Error("Saved file is invalid");
       }
 
+      const retentionDays =
+        String((req.body && req.body.day) || "").trim() ===
+        String(EXTENDED_RETENTION_DAYS)
+          ? EXTENDED_RETENTION_DAYS
+          : DEFAULT_RETENTION_DAYS;
+
+      if (retentionDays === EXTENDED_RETENTION_DAYS) {
+        await setRetentionDays(finalName, retentionDays);
+      } else {
+        // Tránh metadata cũ ảnh hưởng nếu tên file được dùng lại.
+        await removeRetentionMetadata(finalName);
+      }
+
       return res.json({
         success: true,
         url: `${PUBLIC_BASE_URL}/videos/${encodeURIComponent(finalName)}`,
@@ -283,7 +303,7 @@ router.post("/", (req, res) => {
         size: stat.size,
         filename: finalName,
         permanent: false,
-        expiresAfterDays: 5,
+        expiresAfterDays: retentionDays,
       });
     } catch (error) {
       // Nếu đã tạo file đích nhưng quá trình kiểm tra thất bại thì xóa

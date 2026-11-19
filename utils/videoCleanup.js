@@ -2,12 +2,15 @@
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const {
+  getRetentionDays,
+  removeRetentionMetadata,
+} = require("./mediaRetention");
 
 const MEDIA_DIR = path.join(__dirname, "..", "public", "videos");
 
-// Xóa file sau 5 ngày
-const MAX_AGE_DAYS = 5;
-const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+// File không có metadata retention riêng sẽ bị xóa sau 5 ngày.
+const DEFAULT_MAX_AGE_DAYS = 5;
 
 // Các định dạng media được phép xóa
 const ALLOWED_EXTENSIONS = new Set([
@@ -102,19 +105,27 @@ async function cleanupOldMedia() {
       }
 
       const ageMs = now - stat.mtimeMs;
+      const retentionDays = await getRetentionDays(
+        file,
+        DEFAULT_MAX_AGE_DAYS,
+      );
+      const maxAgeMs = retentionDays * 24 * 60 * 60 * 1000;
 
-      if (ageMs < MAX_AGE_MS) {
+      if (ageMs < maxAgeMs) {
         continue;
       }
 
       try {
         await fs.promises.unlink(fullPath);
+        await removeRetentionMetadata(file);
 
         deletedCount += 1;
 
         const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
 
-        console.log(`🗑️ Deleted old media: ${file} (${ageDays} day(s) old)`);
+        console.log(
+          `🗑️ Deleted old media: ${file} (${ageDays} day(s) old, retention: ${retentionDays} day(s))`,
+        );
       } catch (error) {
         failedCount += 1;
         console.warn(`⚠️ Cannot delete ${file}: ${error.message}`);
