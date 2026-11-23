@@ -99,6 +99,7 @@ app.use("/api/podcastHook", require("./routes/podcastHook"));
 app.use("/api/simple-media-overlay", require("./routes/mediaOverlay"));
 app.use("/api/black-video", require("./routes/blackVideo"));
 app.use("/api/story-image", require("./routes/storyImage.js"));
+app.use("/api/story-style", require("./routes/storyStyle"));
 app.use(
   "/api/overlay-story-video-drama",
   require("./routes/overlayVideoDrama"),
