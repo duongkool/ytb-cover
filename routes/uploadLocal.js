@@ -17,7 +17,7 @@ const PUBLIC_BASE_URL = (
   process.env.PUBLIC_BASE_URL || "https://video.xopboo.com"
 ).replace(/\/+$/, "");
 
-const DEFAULT_RETENTION_DAYS = 5;
+const DEFAULT_RETENTION_DAYS = 10;
 const EXTENDED_RETENTION_DAYS = 30;
 
 for (const dir of [TEMP_DIR, MEDIA_DIR]) {

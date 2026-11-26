@@ -9,8 +9,8 @@ const {
 
 const MEDIA_DIR = path.join(__dirname, "..", "public", "videos");
 
-// File không có metadata retention riêng sẽ bị xóa sau 5 ngày.
-const DEFAULT_MAX_AGE_DAYS = 5;
+// File không có metadata retention riêng sẽ bị xóa sau 10 ngày.
+const DEFAULT_MAX_AGE_DAYS = 10;
 
 // Các định dạng media được phép xóa
 const ALLOWED_EXTENSIONS = new Set([
