@@ -33,6 +33,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "https://n8n2.xopboo.com",
   "https://admin.xopboo.com",
+  "https://fb.xopboo.com",
 ];
 
 app.use(
